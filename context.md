@@ -5,11 +5,32 @@ This project is a complete, production-ready Discord bot written in Python that 
 
 The bot is designed to run 24/7 on a cloud platform (e.g., Render, Replit) and features an embedded keep-alive web server to avoid sleeping. All study tracking data is saved persistently in a local `study_data.json` file.
 
+## Architecture
+The bot uses a **cog-based modular architecture**. The main bot logic lives in `bot.py`, while new feature modules are loaded as Discord.py extensions (cogs) from the `cogs/` directory via `setup_hook`.
+
+### File Structure
+```
+valence-study-bot/
+├── bot.py                  # Main bot script (core tracking, commands, events)
+├── cogs/
+│   ├── discipline.py       # Discipline enforcement module (Gemini)
+│   └── gaming.py           # Gaming/chess tracking module (Gemini)
+├── study_data.json         # Persistent data store
+├── requirements.txt        # Python dependencies
+├── render.yaml             # Render deployment config
+├── runtime.txt             # Python runtime version
+├── context.md              # This file
+├── .env                    # Environment variables (BOT_TOKEN, channel IDs)
+├── .env.example            # Env template
+├── .gitignore              # Git ignore rules
+└── start_bot.bat           # Windows startup script
+```
+
 ## Detailed Changes and Features Implemented
-The bot has been extensively iterated upon. Here is the full breakdown of features added to `bot.py` in extreme detail:
+The bot has been extensively iterated upon. Here is the full breakdown of features:
 
 ### 1. Channel Types and Tracking Mechanics
-- **Study Voice Channels:** Tracks total time spent. Counts towards all-time, weekly, and daily study statistics. Triggers streak updates.
+- **Study Voice Channels (`STUDY_CHANNELS`):** Tracks total time spent. Counts towards all-time, weekly, and daily study statistics. Triggers streak updates. Includes both "Study Room" (1514208313452007514) and "Group Study" (1514596473629708298).
 - **Group Pomodoro Channel (`1514244606827561171`):** Features an **absolute clock** (60 minutes study / 10 minutes break) tied to Unix epoch time. When users join, the bot dynamically calculates their actual study time (excluding breaks). 
   - Updates the channel's status every 30 seconds (e.g., "🔴 Study Time — 45:00 left" or "🟢 Break Time — 08:00 left").
   - Sends phase transition alerts to the log channel mentioning active users.
@@ -49,13 +70,32 @@ The bot has been extensively iterated upon. Here is the full breakdown of featur
 - Contains a lightweight `aiohttp` web server running on port 8080.
 - Implements **Crash Recovery**: On boot (`on_ready`), the bot checks `study_data.json` for orphaned sessions (where the bot crashed while a user was still in a voice channel) and automatically resets them to prevent corrupted 100-hour sessions.
 
-## File Paths
-Here are the absolute paths to all the files in this project to send to your friend:
-- **Main Bot Script:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\bot.py`
-- **Dependencies List:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\requirements.txt`
-- **Database (JSON):** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\study_data.json`
-- **Environment Variables:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\.env`
-- **Env Template:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\.env.example`
-- **Git Ignore:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\.gitignore`
+## Cog Modules (Gemini Extensions)
 
-*Note: Your friend will need to set up their own `.env` file with the `BOT_TOKEN` before running the bot.*
+### 7. Discipline Cog (`cogs/discipline.py`)
+A daily discipline enforcement system that runs automatically at midnight IST.
+
+- **Daily Check Loop:** Runs every 10 minutes. At midnight IST, it checks each user's study time for the previous day.
+- **Zero-Hour Punishment:** If a user studied 0 hours the previous day:
+  - They receive a harsh DM embed showing their 0 hours vs. their partner's hours.
+  - A "discipline strike" is added to their record.
+- **Strike System:**
+  - **Strike 1-2:** DM warning with strike count.
+  - **Strike 3:** Public warning posted in General channel that the user will be kicked if they don't study today.
+  - **Strike 4:** Auto-kick from the server with a public announcement.
+- **Strike Reset:** If a user studies any amount on a given day, their strikes reset to 0.
+- **Target Users:** Valence (856485470171299891) and Ujjwal (1403716456025165864).
+
+### 8. Gaming Cog (`cogs/gaming.py`)
+A competitive gaming tracker for board game breaks between study sessions.
+
+- **`/link_chess`**: Links a user's Lichess or Chess.com account for auto-tracking.
+- **`/game_match`**: Manually starts a game match between two users (any game/format).
+- **`/game_result`**: Manually records the winner/loser of a game. Updates win/loss stats in `study_data.json`.
+- **Voice Channel Listener:** When a user joins a game voice channel (Chess, Shogi, GO, Checkers), the bot sends a message prompting them to use `/game_match`.
+- **Lichess Auto-Poll (`chess_poll_loop`):** Every 5 minutes, polls the Lichess API for the latest game between the two linked users. If a new game is found, it auto-resolves the result and posts an announcement. Maintains a list of processed game IDs to avoid duplicates.
+- **Game Channels Tracked:**
+  - Chess (1514624613743857775)
+  - Shogi (1514624657935044738)
+  - GO (1514624725102628945)
+  - Checkers (1514624781692178683)
