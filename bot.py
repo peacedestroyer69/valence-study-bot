@@ -1057,9 +1057,24 @@ async def check_weekly_reset(data: dict):
                     for uid, udata in data["users"].items():
                         udata["total_seconds_weekly"] = 0
                         udata["total_seconds_today"] = 0
+                        udata["messages_weekly"] = 0
 
                     data["meta"]["last_weekly_reset"] = today_str
                     await save_data(data)
+
+                    # --- Strip ALL milestone roles from everyone (weekly reset) ---
+                    all_role_ids = set(MILESTONE_ROLES.values()) | set(DOUBT_MILESTONE_ROLES.values()) | set(TEXT_MILESTONE_ROLES.values())
+                    for guild in bot.guilds:
+                        for member in guild.members:
+                            if member.bot:
+                                continue
+                            roles_to_strip = [r for r in member.roles if r.id in all_role_ids]
+                            if roles_to_strip:
+                                try:
+                                    await member.remove_roles(*roles_to_strip, reason="Weekly reset - all milestone roles cleared")
+                                    logging.info(f"[WEEKLY RESET] Stripped {len(roles_to_strip)} roles from {member.display_name}")
+                                except Exception as e:
+                                    logging.error(f"Failed to strip roles from {member.display_name}: {e}")
 
                     # Send weekly winner announcement
                     if winner_uid is not None and winner_seconds > 0:
@@ -1097,60 +1112,71 @@ async def check_weekly_reset(data: dict):
 # ============================================================
 
 async def check_and_award_milestones(member: discord.Member, data: dict):
-    """Checks and awards milestone roles based on all-time study hours."""
+    """Awards the HIGHEST earned study role and removes all lower ones.
+    Uses WEEKLY hours so roles reset every Monday."""
     try:
         uid = str(member.id)
         udata = data["users"].get(uid)
         if udata is None:
             return
 
-        total_hours = udata.get("total_seconds_alltime", 0) / 3600
+        total_hours = udata.get("total_seconds_weekly", 0) / 3600
+        guild = member.guild
 
+        earned_threshold = None
+        earned_role_id = None
         for hours_threshold in sorted(MILESTONE_ROLES.keys()):
             if total_hours >= hours_threshold:
-                role_id = MILESTONE_ROLES[hours_threshold]
-                existing_role = discord.utils.get(member.roles, id=role_id)
-                if existing_role is None:
-                    guild = member.guild
-                    role = guild.get_role(role_id)
-                    if role is None:
-                        logging.warning(f"Milestone role {role_id} not found in guild.")
-                        continue
+                earned_threshold = hours_threshold
+                earned_role_id = MILESTONE_ROLES[hours_threshold]
 
-                    try:
-                        await member.add_roles(role, reason=f"YPT milestone: {hours_threshold}h reached")
-                    except discord.Forbidden:
-                        logging.error(f"No permission to assign role {role.name} to {member.display_name}")
-                        continue
-                    except discord.HTTPException as e:
-                        logging.error(f"Failed to assign milestone role: {e}")
-                        continue
+        all_milestone_role_ids = set(MILESTONE_ROLES.values())
+        roles_to_remove = [r for r in member.roles if r.id in all_milestone_role_ids]
+        if roles_to_remove:
+            try:
+                await member.remove_roles(*roles_to_remove, reason="Milestone role update")
+            except (discord.Forbidden, discord.HTTPException) as e:
+                logging.error(f"Failed to remove old milestone roles: {e}")
 
-                    # Send celebration embed
-                    try:
-                        channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
-                        if channel:
-                            embed = discord.Embed(
-                                title="🎉 MILESTONE UNLOCKED!",
-                                description=(
-                                    f"{member.mention} just crossed **{hours_threshold} hours** of study! 🔥\n"
-                                    f"Role **{role.name}** has been awarded!"
-                                ),
-                                color=0xFFD700,
-                                timestamp=datetime.datetime.now(datetime.timezone.utc),
-                            )
-                            if member.display_avatar:
-                                embed.set_thumbnail(url=member.display_avatar.url)
-                            embed.set_footer(text="Keep grinding. The next milestone awaits.")
-                            await channel.send(embed=embed)
-                    except Exception as e:
-                        logging.error(f"Failed to send milestone celebration: {e}")
+        if earned_role_id:
+            role = guild.get_role(earned_role_id)
+            if role is None:
+                logging.warning(f"Milestone role {earned_role_id} not found in guild.")
+                return
+
+            already_has = discord.utils.get(member.roles, id=earned_role_id)
+            try:
+                await member.add_roles(role, reason=f"YPT milestone: {earned_threshold}h this week")
+            except discord.Forbidden:
+                logging.error(f"No permission to assign role {role.name} to {member.display_name}")
+                return
+            except discord.HTTPException as e:
+                logging.error(f"Failed to assign milestone role: {e}")
+                return
+
+            if not already_has:
+                try:
+                    channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
+                    if channel:
+                        embed = discord.Embed(
+                            title="\U0001f389 MILESTONE UNLOCKED!",
+                            description=(
+                                f"{member.mention} just crossed **{earned_threshold} hours** this week! \U0001f525\n"
+                                f"Role **{role.name}** has been awarded!"
+                            ),
+                            color=0xFFD700,
+                            timestamp=datetime.datetime.now(datetime.UTC),
+                        )
+                        if member.display_avatar:
+                            embed.set_thumbnail(url=member.display_avatar.url)
+                        embed.set_footer(text="Keep grinding. The next milestone awaits.")
+                        await channel.send(embed=embed)
+                except Exception as e:
+                    logging.error(f"Failed to send milestone celebration: {e}")
     except Exception as e:
         logging.error(f"Milestone check error: {e}")
-
-
 async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
-    """Checks and awards milestone roles based on total doubt session hours."""
+    """Awards the HIGHEST earned doubt role and removes all lower ones."""
     try:
         uid = str(member.id)
         udata = data["users"].get(uid)
@@ -1158,50 +1184,60 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
             return
 
         total_hours = udata.get("total_seconds_doubt", 0) / 3600
+        guild = member.guild
 
+        earned_threshold = None
+        earned_role_id = None
         for hours_threshold in sorted(DOUBT_MILESTONE_ROLES.keys()):
             if total_hours >= hours_threshold:
-                role_id = DOUBT_MILESTONE_ROLES[hours_threshold]
-                existing_role = discord.utils.get(member.roles, id=role_id)
-                if existing_role is None:
-                    guild = member.guild
-                    role = guild.get_role(role_id)
-                    if role is None:
-                        logging.warning(f"Doubt milestone role {role_id} not found in guild.")
-                        continue
+                earned_threshold = hours_threshold
+                earned_role_id = DOUBT_MILESTONE_ROLES[hours_threshold]
 
-                    try:
-                        await member.add_roles(role, reason=f"YPT doubt milestone: {hours_threshold}h reached")
-                    except discord.Forbidden:
-                        logging.error(f"No permission to assign role {role.name} to {member.display_name}")
-                        continue
-                    except discord.HTTPException as e:
-                        logging.error(f"Failed to assign doubt milestone role: {e}")
-                        continue
+        all_doubt_role_ids = set(DOUBT_MILESTONE_ROLES.values())
+        roles_to_remove = [r for r in member.roles if r.id in all_doubt_role_ids]
+        if roles_to_remove:
+            try:
+                await member.remove_roles(*roles_to_remove, reason="Doubt role update")
+            except (discord.Forbidden, discord.HTTPException) as e:
+                logging.error(f"Failed to remove old doubt roles: {e}")
 
-                    # Send celebration embed
-                    try:
-                        channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
-                        if channel:
-                            embed = discord.Embed(
-                                title="🧠 DOUBT MILESTONE UNLOCKED!",
-                                description=(
-                                    f"{member.mention} just crossed **{hours_threshold} hours** of doubt sessions! 🔥\n"
-                                    f"Role **{role.name}** has been awarded!"
-                                ),
-                                color=0xFFA500,
-                                timestamp=datetime.datetime.now(datetime.timezone.utc),
-                            )
-                            if member.display_avatar:
-                                embed.set_thumbnail(url=member.display_avatar.url)
-                            embed.set_footer(text="Every doubt cleared is a concept mastered. Keep asking.")
-                            await channel.send(embed=embed)
-                    except Exception as e:
-                        logging.error(f"Failed to send doubt milestone celebration: {e}")
+        if earned_role_id:
+            role = guild.get_role(earned_role_id)
+            if role is None:
+                logging.warning(f"Doubt role {earned_role_id} not found in guild.")
+                return
+
+            already_has = discord.utils.get(member.roles, id=earned_role_id)
+            try:
+                await member.add_roles(role, reason=f"YPT doubt milestone: {earned_threshold}h")
+            except discord.Forbidden:
+                logging.error(f"No permission to assign role {role.name} to {member.display_name}")
+                return
+            except discord.HTTPException as e:
+                logging.error(f"Failed to assign doubt role: {e}")
+                return
+
+            if not already_has:
+                try:
+                    channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
+                    if channel:
+                        embed = discord.Embed(
+                            title="\U0001f9e0 DOUBT MILESTONE UNLOCKED!",
+                            description=(
+                                f"{member.mention} just crossed **{earned_threshold} hours** of doubt sessions! \U0001f525\n"
+                                f"Role **{role.name}** has been awarded!"
+                            ),
+                            color=0xFFA500,
+                            timestamp=datetime.datetime.now(datetime.UTC),
+                        )
+                        if member.display_avatar:
+                            embed.set_thumbnail(url=member.display_avatar.url)
+                        embed.set_footer(text="Every doubt cleared is a concept mastered.")
+                        await channel.send(embed=embed)
+                except Exception as e:
+                    logging.error(f"Failed to send doubt celebration: {e}")
     except Exception as e:
         logging.error(f"Doubt milestone check error: {e}")
-
-
 async def check_and_award_text_milestones(member: discord.Member, data: dict):
     """Checks and awards milestone roles based on total message count."""
     try:
@@ -1931,16 +1967,15 @@ async def on_ready():
     # Restore/create leaderboard embed
     await update_leaderboard_embed("alltime")
 
-    # Sync slash commands only on first connect (not on reconnects)
-    if not getattr(bot, '_commands_synced', False):
-        try:
-            synced = await bot.tree.sync()
-            logging.info(f"Synced {len(synced)} slash command(s).")
-            bot._commands_synced = True
-        except Exception as e:
-            logging.error(f"Failed to sync slash commands: {e}")
-    else:
-        logging.info("Reconnected. Skipping command sync (already synced).")
+    # Sync slash commands (guild-specific for instant availability)
+    try:
+        for guild in bot.guilds:
+            synced = await bot.tree.sync(guild=guild)
+            logging.info(f"Synced {len(synced)} slash command(s) to guild {guild.name}.")
+        global_synced = await bot.tree.sync()
+        logging.info(f"Synced {len(global_synced)} slash command(s) globally.")
+    except Exception as e:
+        logging.error(f"Failed to sync slash commands: {e}")
 
     logging.info("Bot ready. All systems operational.")
 
