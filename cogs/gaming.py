@@ -43,8 +43,9 @@ GAME_CHANNELS = {
     1514624781692178683,  # Checkers
 }
 
-# Text channel to send poke messages
-POKE_TEXT_CHANNEL_ID = 1514241642415001610  # Study Discussion
+# Text channel to send poke messages and match announcements
+CHESS_TEXT_CHANNEL_ID = 1514667734355542188  # Chess Text
+POKE_TEXT_CHANNEL_ID = 1514667734355542188   # Chess Text (poke goes here too)
 
 # General channel (fallback for announcements)
 GENERAL_CHANNEL_ID = 1514187630374289418
@@ -316,11 +317,11 @@ class GamingCog(commands.Cog):
                     data["users"][winner_id]["gaming_wins"] += 1
                     data["users"][loser_id]["gaming_losses"] += 1
 
-                    # Announce in channel
+                    # Announce in chess text channel
                     speed = game_data.get("speed", "unknown")
                     channel = self.bot.get_channel(
-                        GENERAL_CHANNEL_ID
-                    ) or self.bot.get_channel(POKE_TEXT_CHANNEL_ID)
+                        CHESS_TEXT_CHANNEL_ID
+                    ) or self.bot.get_channel(GENERAL_CHANNEL_ID)
 
                     if channel:
                         embed = discord.Embed(
