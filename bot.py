@@ -1967,11 +1967,13 @@ async def on_ready():
     # Restore/create leaderboard embed
     await update_leaderboard_embed("alltime")
 
-    # Sync slash commands (guild-specific for instant availability)
+    # Sync slash commands — copy cog commands to each guild for instant availability
     try:
         for guild in bot.guilds:
+            bot.tree.copy_global_to(guild=guild)
             synced = await bot.tree.sync(guild=guild)
             logging.info(f"Synced {len(synced)} slash command(s) to guild {guild.name}.")
+        # Also sync globally (takes up to 1h but covers new guilds)
         global_synced = await bot.tree.sync()
         logging.info(f"Synced {len(global_synced)} slash command(s) globally.")
     except Exception as e:
