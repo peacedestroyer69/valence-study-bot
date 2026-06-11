@@ -72,7 +72,7 @@ DEFAULT_COLOR = 0x2B2D31
 
 # --- Voice Channel Categories ---
 # Study channels: full tracking, milestones, leaderboard, streaks
-STUDY_CHANNELS = {1514208313452007514}  # Study Room
+STUDY_CHANNELS = {1514208313452007514, 1514596473629708298}  # Study Room, Group Study
 
 # Doubt channels: tracked separately, tagged with subject, no milestones
 DOUBT_CHANNELS = {
@@ -318,6 +318,15 @@ intents.guilds = True
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+async def setup_hook():
+    try:
+        await bot.load_extension("cogs.discipline")
+        await bot.load_extension("cogs.gaming")
+    except Exception as e:
+        logging.error(f"Failed to load cogs: {e}")
+
+bot.setup_hook = setup_hook
 
 
 # ============================================================
