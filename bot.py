@@ -38,20 +38,20 @@ CELEBRATION_CHANNEL_ID = int(os.getenv("CELEBRATION_CHANNEL_ID", "0"))
 # Maps total hours (int) -> Discord Role ID (int)
 # Roles are awarded cumulatively, user keeps all earned roles.
 MILESTONE_ROLES = {
-    2:   1514208595737182338,  # 🥉 Bronze Scholar
-    5:   1514208694051672195,  # 🥈 Silver Grinder
-    10:  1514210766256082954,  # 🥇 Gold Grinder
-    15:  1514208770887127192,  # 💎 Diamond Grindmaster
-    20:  1514208898406416505,  # 👑 Legendary Studier
+    10:  1514208595737182338,  # 🥉 Bronze Scholar     — ~2-3 days of grinding
+    50:  1514208694051672195,  # 🥈 Silver Grinder     — ~2 weeks consistent
+    150: 1514210766256082954,  # 🥇 Gold Grinder       — ~1 month serious grind
+    300: 1514208770887127192,  # 💎 Diamond Grindmaster — ~2-3 months elite
+    500: 1514208898406416505,  # 👑 Legendary Studier   — half a year of dedication
 }
 
 # Doubt milestone roles — awarded based on total doubt session hours
 DOUBT_MILESTONE_ROLES = {
-    0:  1514254737372090438,  # 🧿 Never Had a Doubt in Life
-    2:  1514228187352268830,  # 🔰 Doubt Beginner
-    5:  1514238409449930752,  # 🧠 Doubt Explorer
-    10: 1514238834559291563,  # 💡 Doubt Master
-    20: 1514238964008226988,  # 🎓 Doubt Professor
+    3:   1514228187352268830,  # 🔰 Doubt Beginner     — getting started
+    10:  1514238409449930752,  # 🧠 Doubt Explorer     — regular collaborator
+    25:  1514238834559291563,  # 💡 Doubt Master       — serious problem solver
+    50:  1514238964008226988,  # 🎓 Doubt Professor    — basically a teacher
+    100: 1514254737372090438,  # 🧿 Never Had a Doubt  — the ultimate flex
 }
 
 # Minimum session length in seconds to count (prevents AFK abuse)
@@ -98,10 +98,10 @@ STUDY_TEXT_CHANNELS = {
 
 # Text activity milestone roles
 TEXT_MILESTONE_ROLES = {
-    10:   1514254760386236496,  # 📝 Active Learner (10 messages)
-    50:   1514255291578056714,  # 💬 Discussion Pro (50 messages)
-    100:  1514255438093484083,  # 🗣️ Knowledge Sharer (100 messages)
-    200:  1514255518288576672,  # 📖 Study Sage (200 messages)
+    50:   1514254760386236496,  # 📝 Active Learner (50 msgs)
+    200:  1514255291578056714,  # 💬 Discussion Pro (200 msgs)
+    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 msgs)
+    1000: 1514255518288576672,  # 📖 Study Sage (1000 msgs)
 }
 
 # --- Pomodoro Configuration ---
