@@ -46,13 +46,14 @@ MILESTONE_ROLES = {
     70:  1514208898406416505,  # 👑 Legendary Studier   — 70h/week (~10h/day beast mode)
 }
 
-# Doubt milestone roles — awarded based on total doubt session hours
+# Doubt milestone roles — awarded based on WEEKLY doubt session hours
+# Reset every Monday, only highest kept.
 DOUBT_MILESTONE_ROLES = {
-    3:   1514228187352268830,  # 🔰 Doubt Beginner     — getting started
-    10:  1514238409449930752,  # 🧠 Doubt Explorer     — regular collaborator
-    25:  1514238834559291563,  # 💡 Doubt Master       — serious problem solver
-    50:  1514238964008226988,  # 🎓 Doubt Professor    — basically a teacher
-    100: 1514254737372090438,  # 🧿 Never Had a Doubt  — the ultimate flex
+    1:   1514228187352268830,  # 🟢 Doubt Beginner     — 1h/week
+    3:   1514238409449930752,  # 🧠 Doubt Explorer     — 3h/week
+    5:   1514238834559291563,  # 💡 Doubt Master       — 5h/week
+    10:  1514238964008226988,  # 🎓 Doubt Professor    — 10h/week
+    15:  1514254737372090438,  # 🧿 Never Had a Doubt  — 15h/week (2h/day doubting)
 }
 
 # Minimum session length in seconds to count (prevents AFK abuse)
@@ -89,12 +90,12 @@ DISCUSSION_CHANNELS = {1514187630374289418}  # General
 # Text study channels: messages are counted for a text activity leaderboard
 STUDY_TEXT_CHANNELS = {1514241642415001610}  # Study Discussion
 
-# Text activity milestone roles
+# Text activity milestone roles — based on WEEKLY messages, reset every Monday
 TEXT_MILESTONE_ROLES = {
-    50:   1514254760386236496,  # 📝 Active Learner (50 messages)
-    200:  1514255291578056714,  # 💬 Discussion Pro (200 messages)
-    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 messages)
-    1000: 1514255518288576672,  # 📖 Study Sage (1000 messages)
+    10:  1514254760386236496,  # 📝 Active Learner (10 msgs/week)
+    30:  1514255291578056714,  # 💬 Discussion Pro (30 msgs/week)
+    75:  1514255438093484083,  # 🗣️ Knowledge Sharer (75 msgs/week)
+    150: 1514255518288576672,  # 📖 Study Sage (150 msgs/week)
 }
 
 # --- Pomodoro Configuration ---
@@ -181,6 +182,7 @@ def _default_user(username: str) -> dict:
         "daily_goal_seconds": DAILY_GOAL_SECONDS,
         # Doubt tracking
         "total_seconds_doubt": 0,
+        "total_seconds_doubt_weekly": 0,
         "doubt_session_count": 0,
         # Discussion tracking
         "total_seconds_discussion": 0,
@@ -1052,7 +1054,9 @@ async def check_weekly_reset(data: dict):
                     for uid, udata in data["users"].items():
                         udata["total_seconds_weekly"] = 0
                         udata["total_seconds_today"] = 0
+                        udata["total_seconds_doubt_weekly"] = 0
                         udata["messages_weekly"] = 0
+                        udata["messages_today"] = 0
 
                     data["meta"]["last_weekly_reset"] = today_str
                     await save_data(data)
@@ -1185,7 +1189,7 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
         if udata is None:
             return
 
-        total_hours = udata.get("total_seconds_doubt", 0) / 3600
+        total_hours = udata.get("total_seconds_doubt_weekly", 0) / 3600
         guild = member.guild
 
         # Find the highest doubt milestone the user qualifies for
@@ -1403,6 +1407,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
         elif ch_type == "doubt":
             # --- DOUBT SESSION: tracked separately, no milestones ---
             udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
+            udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
             udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
             await save_data(data)
 
@@ -1452,7 +1457,7 @@ async def on_message(message: discord.Message):
         await save_data(data)
 
         # Award text milestone roles (only highest, remove lower)
-        total_msgs = udata.get("total_messages", 0)
+        total_msgs = udata.get("messages_weekly", 0)
         guild = message.guild
         if guild:
             member = guild.get_member(message.author.id)
