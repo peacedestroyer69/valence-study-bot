@@ -35,14 +35,15 @@ CELEBRATION_CHANNEL_ID = int(os.getenv("CELEBRATION_CHANNEL_ID", "0"))
 
 # --- Hardcoded Configuration ---
 
-# Maps total hours (int) -> Discord Role ID (int)
-# Roles are awarded cumulatively, user keeps all earned roles.
+# Maps total WEEKLY hours (int) -> Discord Role ID (int)
+# Roles reset every Monday — only the HIGHEST is kept.
+# Thresholds are for a single week (168h max).
 MILESTONE_ROLES = {
-    10:  1514208595737182338,  # 🥉 Bronze Scholar     — ~2-3 days of grinding
-    50:  1514208694051672195,  # 🥈 Silver Grinder     — ~2 weeks consistent
-    150: 1514210766256082954,  # 🥇 Gold Grinder       — ~1 month serious grind
-    300: 1514208770887127192,  # 💎 Diamond Grindmaster — ~2-3 months elite
-    500: 1514208898406416505,  # 👑 Legendary Studier   — half a year of dedication
+    5:   1514208595737182338,  # 🥉 Bronze Scholar     — 5h/week (~45 min/day)
+    15:  1514208694051672195,  # 🥈 Silver Grinder     — 15h/week (~2h/day)
+    30:  1514210766256082954,  # 🥇 Gold Grinder       — 30h/week (~4.3h/day)
+    50:  1514208770887127192,  # 💎 Diamond Grindmaster — 50h/week (~7h/day)
+    70:  1514208898406416505,  # 👑 Legendary Studier   — 70h/week (~10h/day beast mode)
 }
 
 # Doubt milestone roles — awarded based on total doubt session hours
@@ -86,22 +87,14 @@ DOUBT_CHANNELS = {
 DISCUSSION_CHANNELS = {1514187630374289418}  # General
 
 # Text study channels: messages are counted for a text activity leaderboard
-# Includes Study Discussion, Doubt text channels, and Discussion channel
-STUDY_TEXT_CHANNELS = {
-    1514241642415001610,  # Study Discussion
-    1514222394628112536,  # Test Discussion stuff
-    1514186752301076510,  # Doubt #1
-    1514221019005714462,  # Doubt #2
-    1514221629864149084,  # Doubt #3
-    1514187630374289418,  # General Discussion
-}
+STUDY_TEXT_CHANNELS = {1514241642415001610}  # Study Discussion
 
 # Text activity milestone roles
 TEXT_MILESTONE_ROLES = {
-    50:   1514254760386236496,  # 📝 Active Learner (50 msgs)
-    200:  1514255291578056714,  # 💬 Discussion Pro (200 msgs)
-    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 msgs)
-    1000: 1514255518288576672,  # 📖 Study Sage (1000 msgs)
+    50:   1514254760386236496,  # 📝 Active Learner (50 messages)
+    200:  1514255291578056714,  # 💬 Discussion Pro (200 messages)
+    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 messages)
+    1000: 1514255518288576672,  # 📖 Study Sage (1000 messages)
 }
 
 # --- Pomodoro Configuration ---
@@ -200,19 +193,24 @@ def _default_user(username: str) -> dict:
         "daily_history": {},
         # Subject tag tracking
         "subject_hours": {},
+        # Study Enforcer tracking
+        "consecutive_missed_days": 0,
+        "last_enforcer_warning": None,
+        # Game Master tracking
+        "chesscom_username": None,
+        "lichess_username": None,
+        "total_game_break_seconds": 0,
     }
 
 
-def get_channel_type(channel_id: int) -> str | None:
-    """Returns the channel category: 'study', 'doubt', 'discussion', or None (ignored)."""
-    if channel_id in STUDY_CHANNELS:
-        return "study"
+def get_channel_type(channel_id: int) -> str:
+    """Returns the channel category: 'study', 'doubt', 'discussion', or 'study' (default)."""
     if channel_id in DOUBT_CHANNELS:
         return "doubt"
     if channel_id in DISCUSSION_CHANNELS:
         return "discussion"
-    # Unlisted channels (chill, etc.) are not tracked
-    return None
+    # Default: treat all unlisted channels as study channels too
+    return "study"
 
 
 # ============================================================
@@ -258,42 +256,35 @@ def format_mm_ss(seconds: int) -> str:
 
 async def load_data() -> dict:
     """Reads and returns the JSON data, initializes file if missing."""
-    def _read():
-        if not os.path.exists(DATA_FILE):
-            return None
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def _write(d):
-        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=2)
-
     try:
-        data = await asyncio.to_thread(_read)
-        if data is None:
+        if not os.path.exists(DATA_FILE):
             data = _default_data()
             async with data_lock:
-                await asyncio.to_thread(_write, data)
+                os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+                with open(DATA_FILE, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
             logging.info("Initialized new study_data.json")
+            return data
+
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
         return data
     except (json.JSONDecodeError, IOError) as e:
         logging.error(f"Failed to load data file: {e}. Reinitializing.")
         data = _default_data()
         async with data_lock:
-            await asyncio.to_thread(_write, data)
+            os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
         return data
 
 
 async def save_data(data: dict):
-    """Acquires the asyncio.Lock, writes JSON without blocking the event loop."""
-    def _write():
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
+    """Acquires the asyncio.Lock, writes JSON with indent=2, releases the lock."""
     async with data_lock:
         try:
-            await asyncio.to_thread(_write)
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
         except (IOError, OSError) as e:
             logging.error(f"Failed to save data file: {e}")
 
@@ -322,9 +313,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def setup_hook():
     try:
         await bot.load_extension("cogs.discipline")
-        await bot.load_extension("cogs.gaming")
+        logging.info("Loaded cogs.discipline")
     except Exception as e:
-        logging.error(f"Failed to load cogs: {e}")
+        logging.error(f"Failed to load discipline cog: {e}")
 
 bot.setup_hook = setup_hook
 
@@ -440,7 +431,7 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
     if not sorted_users:
         embed.description = "No sessions recorded yet. Join a voice channel to get started!"
         embed.set_footer(text=f"Last updated: <t:{now_unix}:R>")
-        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        embed.timestamp = datetime.datetime.now(datetime.UTC)
         return embed
 
     for rank, (uid, udata) in enumerate(sorted_users[:5], start=1):
@@ -553,7 +544,7 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
             )
 
     embed.set_footer(text=f"Last updated: <t:{now_unix}:R>")
-    embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+    embed.timestamp = datetime.datetime.now(datetime.UTC)
 
     return embed
 
@@ -709,7 +700,7 @@ async def send_session_log(member: discord.Member, session_seconds: int, data: d
             embed.color = 0x57F287  # Green for new PB
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        embed.timestamp = datetime.datetime.now(datetime.UTC)
 
         await channel.send(embed=embed)
     except Exception as e:
@@ -810,7 +801,7 @@ async def send_doubt_log(member: discord.Member, session_seconds: int, data: dic
         )
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        embed.timestamp = datetime.datetime.now(datetime.UTC)
 
         tag_view = SubjectTagView(uid, session_seconds)
         await log_channel.send(embed=embed, view=tag_view)
@@ -850,7 +841,7 @@ async def send_discussion_log(member: discord.Member, session_seconds: int, data
         embed.add_field(name="\U0001f550 Total Discussion Time", value=format_time(total_disc), inline=True)
 
         embed.set_footer(text="Not everything has to be study. Chill is valid too.")
-        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        embed.timestamp = datetime.datetime.now(datetime.UTC)
 
         await log_channel.send(embed=embed)
     except Exception as e:
@@ -890,7 +881,7 @@ async def send_pomodoro_session_log(member: discord.Member, study_seconds: int, 
         embed.add_field(name="\u231a Finished", value=f"<t:{unix_end}:R>", inline=True)
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+        embed.timestamp = datetime.datetime.now(datetime.UTC)
 
         await channel.send(embed=embed)
     except Exception as e:
@@ -1032,11 +1023,15 @@ async def check_weekly_reset(data: dict):
             today = datetime.date.today()
             today_str = today.isoformat()
 
-            # --- Daily reset for total_seconds_today ---
+            # NOTE: Enforcer logic (DMs, warnings, kicks) is handled by
+            # cogs/discipline.py to avoid duplication. Removed from bot.py.
+
+            # --- Daily reset for total_seconds_today and messages_today ---
             for uid, udata in data["users"].items():
                 last_study = udata.get("last_study_date")
                 if last_study and last_study != today_str:
                     udata["total_seconds_today"] = 0
+                    udata["messages_today"] = 0
 
             # --- Weekly reset ---
             if today.weekday() == WEEKLY_RESET_DAY:
@@ -1071,7 +1066,7 @@ async def check_weekly_reset(data: dict):
                             roles_to_strip = [r for r in member.roles if r.id in all_role_ids]
                             if roles_to_strip:
                                 try:
-                                    await member.remove_roles(*roles_to_strip, reason="Weekly reset - all milestone roles cleared")
+                                    await member.remove_roles(*roles_to_strip, reason="Weekly reset — all milestone roles cleared")
                                     logging.info(f"[WEEKLY RESET] Stripped {len(roles_to_strip)} roles from {member.display_name}")
                                 except Exception as e:
                                     logging.error(f"Failed to strip roles from {member.display_name}: {e}")
@@ -1089,7 +1084,7 @@ async def check_weekly_reset(data: dict):
                                         f"**{format_time(winner_seconds)}** of study! 🔥🎉"
                                     ),
                                     color=0xFFD700,
-                                    timestamp=datetime.datetime.now(datetime.timezone.utc),
+                                    timestamp=datetime.datetime.now(datetime.UTC),
                                 )
                                 embed.set_footer(text="A new week begins. The grind resets. Go again. 💪")
                                 await channel.send(embed=embed)
@@ -1123,6 +1118,7 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
         total_hours = udata.get("total_seconds_weekly", 0) / 3600
         guild = member.guild
 
+        # Find the highest milestone the user qualifies for
         earned_threshold = None
         earned_role_id = None
         for hours_threshold in sorted(MILESTONE_ROLES.keys()):
@@ -1130,14 +1126,16 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                 earned_threshold = hours_threshold
                 earned_role_id = MILESTONE_ROLES[hours_threshold]
 
+        # Remove ALL milestone roles first, then add only the highest
         all_milestone_role_ids = set(MILESTONE_ROLES.values())
         roles_to_remove = [r for r in member.roles if r.id in all_milestone_role_ids]
         if roles_to_remove:
             try:
-                await member.remove_roles(*roles_to_remove, reason="Milestone role update")
+                await member.remove_roles(*roles_to_remove, reason="Milestone role update — removing lower tiers")
             except (discord.Forbidden, discord.HTTPException) as e:
                 logging.error(f"Failed to remove old milestone roles: {e}")
 
+        # Award the highest earned role
         if earned_role_id:
             role = guild.get_role(earned_role_id)
             if role is None:
@@ -1154,14 +1152,15 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                 logging.error(f"Failed to assign milestone role: {e}")
                 return
 
+            # Only celebrate if they didn't already have this exact role
             if not already_has:
                 try:
                     channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
                     if channel:
                         embed = discord.Embed(
-                            title="\U0001f389 MILESTONE UNLOCKED!",
+                            title="🎉 MILESTONE UNLOCKED!",
                             description=(
-                                f"{member.mention} just crossed **{earned_threshold} hours** this week! \U0001f525\n"
+                                f"{member.mention} just crossed **{earned_threshold} hours** this week! 🔥\n"
                                 f"Role **{role.name}** has been awarded!"
                             ),
                             color=0xFFD700,
@@ -1175,8 +1174,11 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                     logging.error(f"Failed to send milestone celebration: {e}")
     except Exception as e:
         logging.error(f"Milestone check error: {e}")
+
+
 async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
-    """Awards the HIGHEST earned doubt role and removes all lower ones."""
+    """Awards the HIGHEST earned doubt role and removes all lower ones.
+    Uses WEEKLY doubt hours so roles reset every Monday."""
     try:
         uid = str(member.id)
         udata = data["users"].get(uid)
@@ -1186,6 +1188,7 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
         total_hours = udata.get("total_seconds_doubt", 0) / 3600
         guild = member.guild
 
+        # Find the highest doubt milestone the user qualifies for
         earned_threshold = None
         earned_role_id = None
         for hours_threshold in sorted(DOUBT_MILESTONE_ROLES.keys()):
@@ -1193,14 +1196,16 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                 earned_threshold = hours_threshold
                 earned_role_id = DOUBT_MILESTONE_ROLES[hours_threshold]
 
+        # Remove ALL doubt milestone roles first
         all_doubt_role_ids = set(DOUBT_MILESTONE_ROLES.values())
         roles_to_remove = [r for r in member.roles if r.id in all_doubt_role_ids]
         if roles_to_remove:
             try:
-                await member.remove_roles(*roles_to_remove, reason="Doubt role update")
+                await member.remove_roles(*roles_to_remove, reason="Doubt role update — removing lower tiers")
             except (discord.Forbidden, discord.HTTPException) as e:
                 logging.error(f"Failed to remove old doubt roles: {e}")
 
+        # Award the highest earned role
         if earned_role_id:
             role = guild.get_role(earned_role_id)
             if role is None:
@@ -1222,9 +1227,9 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                     channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
                     if channel:
                         embed = discord.Embed(
-                            title="\U0001f9e0 DOUBT MILESTONE UNLOCKED!",
+                            title="🧠 DOUBT MILESTONE UNLOCKED!",
                             description=(
-                                f"{member.mention} just crossed **{earned_threshold} hours** of doubt sessions! \U0001f525\n"
+                                f"{member.mention} just crossed **{earned_threshold} hours** of doubt sessions! 🔥\n"
                                 f"Role **{role.name}** has been awarded!"
                             ),
                             color=0xFFA500,
@@ -1232,80 +1237,12 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                         )
                         if member.display_avatar:
                             embed.set_thumbnail(url=member.display_avatar.url)
-                        embed.set_footer(text="Every doubt cleared is a concept mastered.")
+                        embed.set_footer(text="Every doubt cleared is a concept mastered. Keep asking.")
                         await channel.send(embed=embed)
                 except Exception as e:
-                    logging.error(f"Failed to send doubt celebration: {e}")
+                    logging.error(f"Failed to send doubt milestone celebration: {e}")
     except Exception as e:
         logging.error(f"Doubt milestone check error: {e}")
-async def check_and_award_text_milestones(member: discord.Member, data: dict):
-    """Checks and awards milestone roles based on total message count."""
-    try:
-        uid = str(member.id)
-        udata = data["users"].get(uid)
-        if udata is None:
-            logging.debug(f"[TEXT ROLES] No user data for {member.display_name}, skipping")
-            return
-
-        total_messages = udata.get("total_messages", 0)
-        logging.info(f"[TEXT ROLES] Checking {member.display_name}: total_messages={total_messages}")
-
-        # Get bot's own top role position for hierarchy debugging
-        bot_member = member.guild.me
-        bot_top_role_pos = bot_member.top_role.position if bot_member else -1
-
-        for msg_threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
-            role_id = TEXT_MILESTONE_ROLES[msg_threshold]
-            if total_messages >= msg_threshold:
-                existing_role = discord.utils.get(member.roles, id=role_id)
-                if existing_role is not None:
-                    logging.debug(f"[TEXT ROLES]   {msg_threshold} msgs -> already has role, skipping")
-                    continue
-
-                guild = member.guild
-                role = guild.get_role(role_id)
-                if role is None:
-                    logging.warning(f"[TEXT ROLES]   {msg_threshold} msgs -> role ID {role_id} NOT FOUND in guild!")
-                    continue
-
-                logging.info(f"[TEXT ROLES]   {msg_threshold} msgs -> assigning '{role.name}' (role pos={role.position}, bot pos={bot_top_role_pos})")
-
-                if role.position >= bot_top_role_pos:
-                    logging.error(f"[TEXT ROLES]   WILL FAIL: role '{role.name}' position ({role.position}) >= bot top role position ({bot_top_role_pos}). Move bot role ABOVE this role in Server Settings > Roles!")
-
-                try:
-                    await member.add_roles(role, reason=f"YPT text milestone: {msg_threshold} messages reached")
-                    logging.info(f"[TEXT ROLES]   SUCCESS: Assigned '{role.name}' to {member.display_name}")
-                except discord.Forbidden:
-                    logging.error(f"[TEXT ROLES]   FORBIDDEN: Cannot assign '{role.name}' to {member.display_name} - bot role is too low in hierarchy!")
-                    continue
-                except discord.HTTPException as e:
-                    logging.error(f"[TEXT ROLES]   HTTP ERROR: Failed to assign '{role.name}': {e}")
-                    continue
-
-                # Send celebration embed
-                try:
-                    channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
-                    if channel:
-                        embed = discord.Embed(
-                            title="\U0001f4ac TEXT MILESTONE UNLOCKED!",
-                            description=(
-                                f"{member.mention} just hit **{msg_threshold} messages** in study discussions! \U0001f525\n"
-                                f"Role **{role.name}** has been awarded!"
-                            ),
-                            color=0x57F287,
-                            timestamp=datetime.datetime.now(datetime.timezone.utc),
-                        )
-                        if member.display_avatar:
-                            embed.set_thumbnail(url=member.display_avatar.url)
-                        embed.set_footer(text="Every word shared is knowledge gained. Keep discussing.")
-                        await channel.send(embed=embed)
-                except Exception as e:
-                    logging.error(f"[TEXT ROLES]   Failed to send celebration: {e}")
-            else:
-                logging.debug(f"[TEXT ROLES]   {msg_threshold} msgs -> not reached yet ({total_messages} < {msg_threshold})")
-    except Exception as e:
-        logging.error(f"[TEXT ROLES] EXCEPTION in check: {e}", exc_info=True)
 
 
 # ============================================================
@@ -1341,14 +1278,7 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
     try:
         # If user joins group pomodoro channel, cancel their individual pomodoro
         if channel.id == POMODORO_CHANNEL_ID and member.id in active_pomodoros:
-            _pomo = active_pomodoros[member.id]
-            # Save partial study time so the session log captures it
-            _total = _pomo.get("total_study_seconds", 0)
-            if _pomo.get("current_phase") == "study":
-                _elapsed = int(time.time()) - (_pomo["phase_end"] - _pomo["study_seconds"])
-                _total += max(0, min(_elapsed, _pomo["study_seconds"]))
-            _pomo["total_study_seconds"] = _total
-            task = _pomo.get("task")
+            task = active_pomodoros[member.id].get("task")
             if task:
                 task.cancel()
             active_pomodoros.pop(member.id, None)
@@ -1359,13 +1289,6 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
 
         data = await load_data()
         udata = ensure_user(data, member)
-
-        # Only track sessions in known channels (study, doubt, discussion, pomodoro)
-        ch_type = get_channel_type(channel.id)
-        if ch_type is None and channel.id != POMODORO_CHANNEL_ID:
-            logging.debug(f"[IGNORED] {member.display_name} joined untracked channel #{channel.name}")
-            return
-
         udata["session_start_timestamp"] = int(time.time())
         await save_data(data)
         logging.info(f"[SESSION START] {member.display_name} joined #{channel.name}")
@@ -1406,12 +1329,6 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
         ch_type = get_channel_type(channel.id)
         udata["session_start_timestamp"] = None
 
-        # Untracked channel (chill, etc.) — just clear session and ignore
-        if ch_type is None and channel.id != POMODORO_CHANNEL_ID:
-            await save_data(data)
-            logging.debug(f"[IGNORED] {member.display_name} left untracked channel #{channel.name}")
-            return
-
         if channel.id == POMODORO_CHANNEL_ID:
             # --- GROUP POMODORO: calculate study time excluding breaks ---
             start_ts = udata.get("session_start_timestamp")
@@ -1451,6 +1368,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                 logging.info(f"[POMODORO DISCARD] {member.display_name} -- {study_secs}s study (below minimum)")
                 await save_data(data)
 
+            await update_voice_channel_status(channel, None)
             await update_bot_presence(data)
         elif ch_type == "study":
             # --- STUDY SESSION: full tracking ---
@@ -1520,24 +1438,48 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
 async def on_message(message: discord.Message):
     """Tracks messages in study text channels for the text activity leaderboard."""
     if message.author.bot:
-        await bot.process_commands(message)
         return
 
-    # Track text activity in eligible channels
-    if message.channel.id in STUDY_TEXT_CHANNELS:
-        try:
-            data = await load_data()
-            udata = ensure_user(data, message.author)
-            udata["total_messages"] = udata.get("total_messages", 0) + 1
-            udata["messages_today"] = udata.get("messages_today", 0) + 1
-            udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
-            await save_data(data)
-            logging.debug(f"Message tracked for {message.author.display_name}: total={udata['total_messages']}")
-            await check_and_award_text_milestones(message.author, data)
-        except Exception as e:
-            logging.error(f"Error tracking message from {message.author.display_name}: {e}")
+    if message.channel.id not in STUDY_TEXT_CHANNELS:
+        return
 
-    await bot.process_commands(message)
+    try:
+        data = await load_data()
+        udata = ensure_user(data, message.author)
+        udata["total_messages"] = udata.get("total_messages", 0) + 1
+        udata["messages_today"] = udata.get("messages_today", 0) + 1
+        udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
+        await save_data(data)
+
+        # Award text milestone roles (only highest, remove lower)
+        total_msgs = udata.get("total_messages", 0)
+        guild = message.guild
+        if guild:
+            member = guild.get_member(message.author.id)
+            if member:
+                earned_role_id = None
+                for threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
+                    if total_msgs >= threshold:
+                        earned_role_id = TEXT_MILESTONE_ROLES[threshold]
+
+                # Remove all text milestone roles, then add highest
+                all_text_role_ids = set(TEXT_MILESTONE_ROLES.values())
+                roles_to_remove = [r for r in member.roles if r.id in all_text_role_ids]
+                if roles_to_remove:
+                    try:
+                        await member.remove_roles(*roles_to_remove, reason="Text milestone update")
+                    except Exception:
+                        pass
+
+                if earned_role_id:
+                    role = guild.get_role(earned_role_id)
+                    if role and not discord.utils.get(member.roles, id=earned_role_id):
+                        try:
+                            await member.add_roles(role, reason=f"Text milestone: {total_msgs} messages")
+                        except Exception:
+                            pass
+    except Exception as e:
+        logging.error(f"Error tracking message from {message.author.display_name}: {e}")
 
 
 # ============================================================
@@ -1610,7 +1552,7 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
                     f"Currently in Pomodoro: {mentions}"
                 ),
                 color=0xED4245,  # Red
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
             embed.set_footer(text="Heads down. Phones away. Let's go.")
         else:
@@ -1621,7 +1563,7 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
                     f"Currently in Pomodoro: {mentions}"
                 ),
                 color=0x57F287,  # Green
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
             embed.set_footer(text="Stretch, hydrate, breathe. You earned it. \U0001f331")
 
@@ -1632,9 +1574,6 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
 
 async def individual_pomodoro_loop(user_id: int):
     """Background task for an individual pomodoro session."""
-    pomo_ref = active_pomodoros.get(user_id)
-    if pomo_ref is None:
-        return
     try:
         while user_id in active_pomodoros:
             pomo = active_pomodoros[user_id]
@@ -1653,7 +1592,7 @@ async def individual_pomodoro_loop(user_id: int):
                         title=f"\U0001f534 Pomodoro #{cycle_num} \u2014 Study Time!",
                         description=f"Focus for **{study_secs // 60} minutes**. Go!",
                         color=0xED4245,
-                        timestamp=datetime.datetime.now(datetime.timezone.utc),
+                        timestamp=datetime.datetime.now(datetime.UTC),
                     )
                     await user.send(embed=embed)
             except Exception:
@@ -1676,7 +1615,7 @@ async def individual_pomodoro_loop(user_id: int):
                         title=f"\U0001f7e2 Pomodoro #{cycle_num} \u2014 Break Time!",
                         description=f"Nice work! Rest for **{break_secs // 60} minutes**.",
                         color=0x57F287,
-                        timestamp=datetime.datetime.now(datetime.timezone.utc),
+                        timestamp=datetime.datetime.now(datetime.UTC),
                     )
                     await user.send(embed=embed)
             except Exception:
@@ -1693,7 +1632,7 @@ async def individual_pomodoro_loop(user_id: int):
         logging.error(f"Individual pomodoro error for {user_id}: {e}")
     finally:
         # Send session summary to study-logs channel
-        pomo = pomo_ref
+        pomo = active_pomodoros.get(user_id, {})
         total_study = pomo.get("total_study_seconds", 0)
         cycles = pomo.get("cycle", 0)
         if total_study > 0:
@@ -1718,7 +1657,7 @@ async def individual_pomodoro_loop(user_id: int):
                     embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
                     embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
                     embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
-                    embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
+                    embed.timestamp = datetime.datetime.now(datetime.UTC)
                     await log_ch.send(embed=embed)
             except Exception as log_err:
                 logging.error(f"Failed to log individual pomo session: {log_err}")
@@ -1735,7 +1674,7 @@ async def weekly_graph_dm_loop():
     while not bot.is_closed():
         try:
             # Check every 10 minutes if it's Sunday 9 PM IST
-            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            now_utc = datetime.datetime.now(datetime.UTC)
             ist_offset = datetime.timedelta(hours=5, minutes=30)
             now_ist = now_utc + ist_offset
 
@@ -1859,7 +1798,7 @@ async def send_weekly_graphs():
                     f"\U0001f525 Study days: **{sum(1 for h in hours if h > 0)}/7**"
                 ),
                 color=USER_COLORS.get(int(uid), DEFAULT_COLOR),
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
             embed.set_image(url="attachment://weekly_graph.png")
             embed.set_footer(text="New week, new grind. Let's go! \U0001f4aa")
@@ -1881,7 +1820,7 @@ async def send_weekly_graphs():
                 title="\U0001f4ca Weekly Reports Sent!",
                 description="Check your DMs for your personalized weekly study graph! \U0001f4e9",
                 color=0x5865F2,
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
             await lb_channel.send(embed=embed)
     except Exception:
@@ -2014,7 +1953,7 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
         embed = discord.Embed(
             title=f"{emblem} {target.display_name}'s Study Profile",
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         if target.display_avatar:
             embed.set_thumbnail(url=target.display_avatar.url)
@@ -2128,7 +2067,7 @@ async def goal_command(interaction: discord.Interaction, hours: float):
                 f"{generate_progress_bar(data['users'][uid].get('total_seconds_today', 0), goal_seconds)}"
             ),
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.set_footer(text="Consistency is key. 💪")
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -2144,12 +2083,13 @@ async def goal_command(interaction: discord.Interaction, hours: float):
 async def lb_command(interaction: discord.Interaction):
     """Triggers a manual leaderboard refresh."""
     try:
+        await interaction.response.defer(ephemeral=True)
         await update_leaderboard_embed(current_view_mode)
-        await interaction.response.send_message("✅ Leaderboard refreshed!", ephemeral=True)
+        await interaction.followup.send("✅ Leaderboard refreshed!", ephemeral=True)
     except Exception as e:
         logging.error(f"Leaderboard command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred refreshing the leaderboard.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred refreshing the leaderboard.", ephemeral=True)
         except Exception:
             pass
 
@@ -2191,31 +2131,23 @@ async def whostudying_command(interaction: discord.Interaction):
             members = [m for m in vc.members if not m.bot]
             if members:
                 ch_type = get_channel_type(vc.id)
-                if vc.id == POMODORO_CHANNEL_ID:
-                    type_label = "Pomodoro"
-                    type_emoji = "🍅"
-                elif ch_type:
-                    type_emoji = {"study": "📚", "doubt": "❓", "discussion": "💬"}.get(ch_type, "🔊")
-                    type_label = ch_type.title()
-                else:
-                    type_emoji = "🔊"
-                    type_label = "Chill"
+                type_emoji = {"study": "📚", "doubt": "❓", "discussion": "💬"}.get(ch_type, "🔊")
                 member_names = ", ".join(m.display_name for m in members)
-                lines.append(f"{type_emoji} **#{vc.name}** ({type_label})\n> {member_names}")
+                lines.append(f"{type_emoji} **#{vc.name}** ({ch_type.title()})\n> {member_names}")
 
         if not lines:
             embed = discord.Embed(
                 title="🔇 Voice Channels",
                 description="Nobody is studying right now. Be the first!",
                 color=0x99AAB5,
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
         else:
             embed = discord.Embed(
                 title="🔊 Currently in Voice",
                 description="\n\n".join(lines),
                 color=0x57F287,
-                timestamp=datetime.datetime.now(datetime.timezone.utc),
+                timestamp=datetime.datetime.now(datetime.UTC),
             )
             embed.set_footer(text=f"{sum(len([m for m in vc.members if not m.bot]) for vc in guild.voice_channels)} people active")
 
@@ -2273,7 +2205,7 @@ async def compare_command(interaction: discord.Interaction, user: discord.Member
             title=f"⚔️ {caller.display_name} vs {user.display_name}",
             description="\n\n".join(lines),
             color=0x5865F2,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.set_footer(text="◀️ = left leads  |  ▶️ = right leads  |  🤝 = tied")
 
@@ -2291,58 +2223,6 @@ async def ping_command(interaction: discord.Interaction):
     """Responds with the bot's latency."""
     latency_ms = round(bot.latency * 1000)
     await interaction.response.send_message(f"🏓 Pong! Latency: **{latency_ms}ms**")
-
-
-@bot.tree.command(name="debugroles", description="Debug: check text milestone role hierarchy and your message count.")
-async def debugroles_command(interaction: discord.Interaction):
-    """Shows diagnostic info about text milestone roles, bot permissions, and message count."""
-    try:
-        data = await load_data()
-        uid = str(interaction.user.id)
-        udata = data["users"].get(uid)
-        total_messages = udata.get("total_messages", 0) if udata else 0
-
-        bot_member = interaction.guild.me
-        bot_top_role = bot_member.top_role
-        bot_pos = bot_top_role.position
-
-        lines = [
-            f"**📊 Text Role Debug for {interaction.user.display_name}**",
-            f"Total messages tracked: **{total_messages}**",
-            f"Bot's top role: **{bot_top_role.name}** (position: {bot_pos})",
-            "",
-            "**Role Hierarchy Check:**",
-        ]
-
-        for threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
-            role_id = TEXT_MILESTONE_ROLES[threshold]
-            role = interaction.guild.get_role(role_id)
-            has_role = discord.utils.get(interaction.user.roles, id=role_id) is not None
-            reached = total_messages >= threshold
-
-            if role is None:
-                lines.append(f"❌ {threshold} msgs → Role ID `{role_id}` **NOT FOUND** in server!")
-            else:
-                can_assign = role.position < bot_pos
-                status_emoji = "✅" if can_assign else "🚫"
-                has_emoji = "👤" if has_role else "—"
-                reached_emoji = "📬" if reached else "📭"
-                lines.append(
-                    f"{status_emoji} {threshold} msgs → **{role.name}** "
-                    f"(pos: {role.position}) "
-                    f"{'CAN assign' if can_assign else '**CANNOT assign — role is ABOVE bot!**'} "
-                    f"| {reached_emoji} {'Reached' if reached else 'Not reached'} "
-                    f"| {has_emoji} {'Has role' if has_role else 'Missing'}"
-                )
-
-        lines.append("")
-        lines.append("If any role shows 🚫, go to **Server Settings → Roles** and drag the bot's role **above** those roles.")
-
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
-    except Exception as e:
-        logging.error(f"debugroles error: {e}", exc_info=True)
-        await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
-
 
 
 # ============================================================
@@ -2395,7 +2275,7 @@ async def pomo_start(interaction: discord.Interaction, study_min: int = 25, brea
                 f"\u26a0\ufe0f This will auto-cancel if you join the group Pomodoro channel."
             ),
             color=0xED4245,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
     except Exception as e:
@@ -2419,18 +2299,15 @@ async def pomo_stop(interaction: discord.Interaction):
             return
 
         pomo = active_pomodoros.pop(uid)
+        task = pomo.get("task")
+        if task:
+            task.cancel()
 
         total_study = pomo.get("total_study_seconds", 0)
         # Add partial study time if currently in study phase
         if pomo.get("current_phase") == "study":
             phase_elapsed = int(time.time()) - (pomo["phase_end"] - pomo["study_seconds"])
             total_study += max(0, min(phase_elapsed, pomo["study_seconds"]))
-        # Store updated total so the background task's finally block can log it
-        pomo["total_study_seconds"] = total_study
-
-        task = pomo.get("task")
-        if task:
-            task.cancel()
 
         cycles = pomo.get("cycle", 0)
 
@@ -2441,7 +2318,7 @@ async def pomo_stop(interaction: discord.Interaction):
                 f"\U0001f4da Total study time: **{format_time(total_study)}**"
             ),
             color=0xFEE75C,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
     except Exception as e:
@@ -2467,7 +2344,7 @@ async def pomo_status(interaction: discord.Interaction):
         embed = discord.Embed(
             title="\U0001f345 Pomodoro Status",
             color=0xED4245 if phase == "study" else 0x57F287,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.add_field(
             name="\U0001f465 Group Pomodoro",
@@ -2517,6 +2394,7 @@ bot.tree.add_command(pomo_group)
 async def weekly_graph_command(interaction: discord.Interaction):
     """Sends the user their weekly study graph immediately."""
     try:
+        await interaction.response.defer(ephemeral=True)
 
         import matplotlib
         matplotlib.use('Agg')
@@ -2527,7 +2405,7 @@ async def weekly_graph_command(interaction: discord.Interaction):
         uid = str(interaction.user.id)
 
         if uid not in data["users"]:
-            await interaction.response.send_message("\U0001f4ed No study data found yet!", ephemeral=True)
+            await interaction.followup.send("\U0001f4ed No study data found yet!", ephemeral=True)
             return
 
         udata = data["users"][uid]
@@ -2608,17 +2486,17 @@ async def weekly_graph_command(interaction: discord.Interaction):
                 f"\U0001f525 Study days: **{sum(1 for h in hours if h > 0)}/7**"
             ),
             color=USER_COLORS.get(interaction.user.id, DEFAULT_COLOR),
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.set_image(url="attachment://weekly_graph.png")
         embed.set_footer(text="Keep grinding! \U0001f4aa")
 
         file = discord.File(buf, filename="weekly_graph.png")
-        await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
     except Exception as e:
         logging.error(f"Weekly graph command error: {e}")
         try:
-            await interaction.response.send_message("\u274c Error generating graph.", ephemeral=True)
+            await interaction.followup.send("\u274c Error generating graph.", ephemeral=True)
         except Exception:
             pass
 
@@ -2690,7 +2568,7 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
             title=f"📅 {target.display_name}'s Study Heatmap",
             description=f"{calendar_text}\n\n{legend}",
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.add_field(
             name="📊 This Month",
@@ -2707,6 +2585,169 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
         except discord.InteractionResponded:
             pass
 
+
+# ============================================================
+# SECTION 12c: GAME MASTER (BREAK TIME INTEGRATION)
+# ============================================================
+
+@bot.tree.command(name="link", description="Link your Chess.com or Lichess account for automatic break-time tracking.")
+@app_commands.describe(
+    platform="Choose the platform",
+    username="Your username on that platform"
+)
+@app_commands.choices(platform=[
+    app_commands.Choice(name="Chess.com", value="chesscom"),
+    app_commands.Choice(name="Lichess", value="lichess"),
+])
+async def link_account(interaction: discord.Interaction, platform: str, username: str):
+    """Links a user's chess account to the bot."""
+    try:
+        data = await load_data()
+        uid = str(interaction.user.id)
+        if uid not in data["users"]:
+            data["users"][uid] = _default_user(interaction.user.display_name)
+            
+        if platform == "chesscom":
+            data["users"][uid]["chesscom_username"] = username
+        elif platform == "lichess":
+            data["users"][uid]["lichess_username"] = username
+            
+        await save_data(data)
+        await interaction.response.send_message(f"✅ Successfully linked your **{platform}** account to **{username}**!", ephemeral=True)
+    except Exception as e:
+        logging.error(f"Link account error: {e}")
+        await interaction.response.send_message("❌ An error occurred while linking your account.", ephemeral=True)
+
+
+@bot.tree.command(name="challenge", description="Challenge someone to a game (Break Time)")
+@app_commands.describe(
+    opponent="The user you want to play against",
+    game="What game are you playing?",
+    time_control="E.g., 5|0 blitz"
+)
+@app_commands.choices(game=[
+    app_commands.Choice(name="Chess", value="chess"),
+    app_commands.Choice(name="Shogi", value="shogi"),
+    app_commands.Choice(name="GO", value="go"),
+    app_commands.Choice(name="Checkers", value="checkers"),
+])
+async def challenge_command(interaction: discord.Interaction, opponent: discord.Member, game: str, time_control: str = "Standard"):
+    """Starts a game match between two users."""
+    try:
+        embed = discord.Embed(
+            title=f"🎮 Break Time Challenge!",
+            description=f"<@{interaction.user.id}> has challenged <@{opponent.id}> to a game of **{game.capitalize()}**!\n\n**Format:** {time_control}",
+            color=0xE74C3C
+        )
+        embed.set_footer(text="Good luck! Don't forget to head back to studying afterwards.")
+        
+        data = await load_data()
+        # Add basic info about accounts if linked
+        uid_self = str(interaction.user.id)
+        uid_opp = str(opponent.id)
+        
+        p1_acc = data["users"].get(uid_self, {}).get("chesscom_username") or data["users"].get(uid_self, {}).get("lichess_username")
+        p2_acc = data["users"].get(uid_opp, {}).get("chesscom_username") or data["users"].get(uid_opp, {}).get("lichess_username")
+        
+        if p1_acc and p2_acc and game == "chess":
+            embed.add_field(name="Accounts", value=f"{interaction.user.display_name}: {p1_acc}\n{opponent.display_name}: {p2_acc}", inline=False)
+            embed.add_field(name="Auto-Tracking", value="Accounts linked! Bot will attempt to fetch results automatically.", inline=False)
+            
+        await interaction.response.send_message(content=f"<@{opponent.id}>", embed=embed)
+    except Exception as e:
+        logging.error(f"Challenge error: {e}")
+
+
+@bot.tree.command(name="poke", description="Poke a user in a game channel to remind them to study.")
+@app_commands.describe(target="The user to poke")
+async def poke_command(interaction: discord.Interaction, target: discord.Member):
+    """Pokes a user to remind them to get back to studying."""
+    try:
+        if target.voice and target.voice.channel:
+            ch_name = target.voice.channel.name
+            await interaction.response.send_message(f"👉 <@{target.id}>, you've been in **{ch_name}** for a while. Are you still playing, or is it time to get back to studying?")
+        else:
+            await interaction.response.send_message(f"<@{target.id}> is not currently in a voice channel.", ephemeral=True)
+    except Exception as e:
+        logging.error(f"Poke error: {e}")
+
+@bot.tree.command(name="gameresult", description="Auto-fetch the latest match result between two linked players from Chess.com.")
+@app_commands.describe(opponent="The user you played against")
+async def gameresult_command(interaction: discord.Interaction, opponent: discord.Member):
+    """Fetches the latest chess.com match between the two linked users."""
+    try:
+        await interaction.response.defer()
+        data = await load_data()
+        uid_self = str(interaction.user.id)
+        uid_opp = str(opponent.id)
+        
+        p1_acc = data["users"].get(uid_self, {}).get("chesscom_username")
+        p2_acc = data["users"].get(uid_opp, {}).get("chesscom_username")
+        
+        if not p1_acc or not p2_acc:
+            await interaction.followup.send("❌ Both players need to `/link` their Chess.com accounts first.")
+            return
+            
+        # Fetch archives for p1
+        async with aiohttp.ClientSession() as session:
+            # Chess.com requires a User-Agent
+            headers = {"User-Agent": "Discord Study Bot / Game Master (Contact: developer@example.com)"}
+            async with session.get(f"https://api.chess.com/pub/player/{p1_acc}/games/archives", headers=headers) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send(f"❌ Failed to fetch data from Chess.com. Status: {resp.status}")
+                    return
+                archives_data = await resp.json()
+                
+        archives = archives_data.get("archives", [])
+        if not archives:
+            await interaction.followup.send("❌ No games found for that user.")
+            return
+            
+        latest_archive_url = archives[-1] # The last month is at the end of the list
+        
+        async with aiohttp.ClientSession() as session:
+            headers = {"User-Agent": "Discord Study Bot / Game Master"}
+            async with session.get(latest_archive_url, headers=headers) as resp:
+                if resp.status != 200:
+                    await interaction.followup.send("❌ Failed to fetch month archive from Chess.com.")
+                    return
+                games_data = await resp.json()
+                
+        games = games_data.get("games", [])
+        # Find the most recent game against p2
+        target_game = None
+        for g in reversed(games): # Look from newest to oldest
+            white = g.get("white", {}).get("username", "").lower()
+            black = g.get("black", {}).get("username", "").lower()
+            if (white == p1_acc.lower() and black == p2_acc.lower()) or (white == p2_acc.lower() and black == p1_acc.lower()):
+                target_game = g
+                break
+                
+        if not target_game:
+            await interaction.followup.send(f"❌ No recent games found between **{p1_acc}** and **{p2_acc}** this month.")
+            return
+            
+        white_player = target_game.get("white", {})
+        black_player = target_game.get("black", {})
+        white_res = white_player.get("result")
+        black_res = black_player.get("result")
+        
+        embed = discord.Embed(
+            title="♟️ Chess Match Result Fetched!",
+            color=0x3498DB
+        )
+        embed.add_field(name="White", value=f"{white_player.get('username')} ({white_res})", inline=True)
+        embed.add_field(name="Black", value=f"{black_player.get('username')} ({black_res})", inline=True)
+        embed.add_field(name="Link", value=f"[View Game]({target_game.get('url')})", inline=False)
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        logging.error(f"Game result fetch error: {e}")
+        try:
+            await interaction.followup.send("❌ Error occurred fetching game results.")
+        except:
+            pass
 
 # ============================================================
 # SECTION 13: ENTRY POINT
