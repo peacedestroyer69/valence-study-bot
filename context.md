@@ -1,101 +1,122 @@
-# Yeolpumta (YPT) Discord Study Bot Context
+# Yeolpumta (YPT) Discord Study Bot — Ultimate Detailed Context
 
-## Project Overview
-This project is a complete, production-ready Discord bot written in Python that replicates the core functionality of the **Yeolpumta (YPT) mobile study tracker app** entirely within a private Discord server (for two users: Valence and Ujjwal). 
+This document is the absolute ground-truth reference for the YPT Discord Study Bot built for the private 2-person server. It details every single ID, configuration, mechanic, and command implemented.
 
-The bot is designed to run 24/7 on a cloud platform (e.g., Render, Replit) and features an embedded keep-alive web server to avoid sleeping. All study tracking data is saved persistently in a local `study_data.json` file.
+---
 
-## Architecture
-The bot uses a **cog-based modular architecture**. The main bot logic lives in `bot.py`, while new feature modules are loaded as Discord.py extensions (cogs) from the `cogs/` directory via `setup_hook`.
+## 1. Environment & Project Files
 
-### File Structure
-```
-valence-study-bot/
-├── bot.py                  # Main bot script (core tracking, commands, events)
-├── cogs/
-│   ├── discipline.py       # Discipline enforcement module (Gemini)
-│   └── gaming.py           # Gaming/chess tracking module (Gemini)
-├── study_data.json         # Persistent data store
-├── requirements.txt        # Python dependencies
-├── render.yaml             # Render deployment config
-├── runtime.txt             # Python runtime version
-├── context.md              # This file
-├── .env                    # Environment variables (BOT_TOKEN, channel IDs)
-├── .env.example            # Env template
-├── .gitignore              # Git ignore rules
-└── start_bot.bat           # Windows startup script
-```
+The bot runs 24/7 on Python using `discord.py` and `aiohttp`. It avoids falling asleep on free cloud hosting by running a background keep-alive web server on port 8080.
+- **Main Bot Script:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\bot.py`
+- **Dependencies List:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\requirements.txt`
+  - `discord.py>=2.0`, `aiohttp>=3.8`, `python-dotenv>=1.0`, `matplotlib>=3.7`
+- **Database (JSON):** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\study_data.json`
+- **Environment Variables:** `C:\Users\ROG\Documents\antigravity\serene-mendeleev\.env`
+  - Requires `BOT_TOKEN`, `LEADERBOARD_CHANNEL_ID`, `LOG_CHANNEL_ID`, `CELEBRATION_CHANNEL_ID`
 
-## Detailed Changes and Features Implemented
-The bot has been extensively iterated upon. Here is the full breakdown of features:
+---
 
-### 1. Channel Types and Tracking Mechanics
-- **Study Voice Channels (`STUDY_CHANNELS`):** Tracks total time spent. Counts towards all-time, weekly, and daily study statistics. Triggers streak updates. Includes both "Study Room" (1514208313452007514) and "Group Study" (1514596473629708298).
-- **Group Pomodoro Channel (`1514244606827561171`):** Features an **absolute clock** (60 minutes study / 10 minutes break) tied to Unix epoch time. When users join, the bot dynamically calculates their actual study time (excluding breaks). 
-  - Updates the channel's status every 30 seconds (e.g., "🔴 Study Time — 45:00 left" or "🟢 Break Time — 08:00 left").
-  - Sends phase transition alerts to the log channel mentioning active users.
-- **Doubt Voice Channels:** Tracked separately from general study time. After a doubt session concludes, the bot posts an interactive **Subject Tag View** dropdown to the logs channel, allowing users to tag the session (Physics, Chemistry, Maths, Biology, CS, General). Time is then aggregated into `subject_hours`.
-- **Discussion Voice Channels:** Only logs the time spent in the session for reference; does not count towards any study metrics or milestones.
-- **Text Activity Tracking:** Tracks message counts in specific text channels (e.g., "Study Discussion"). Includes an anti-spam cooldown and message leaderboard.
+## 2. Hardcoded Discord IDs
 
-### 2. Milestone and Role Gamification
-- **Study Milestones:** Automatically awards standard Discord roles based on total study hours (from 10h to 2000h).
-- **Doubt Milestones:** Separate roles for time spent answering/asking doubts (e.g., Doubt Beginner, Doubt Explorer... up to "Never Had a Doubt" at 50h).
-- **Text Milestones:** Roles awarded based on the number of productive messages sent (e.g., Active Learner at 50 msgs to Study Sage at 1000 msgs).
+### A. Users
+- **Valence (`856485470171299891`)** — Custom Color: Discord Blurple (`#5865F2`)
+- **Ujjwal (`1403716456025165864`)** — Custom Color: Discord Pink (`#EB459E`)
 
-### 3. Personal Pomodoro System
-- Added an independent timer system for individuals using `/pomodoro start [study_min] [break_min]`. 
-- Sends DMs when study and break phases toggle.
-- Uses `active_pomodoros` dictionary and `asyncio.create_task()` to run in the background. 
-- Auto-cancels the personal timer if the user joins the Group Pomodoro voice channel to enforce sync.
-- Stopping the timer outputs a session completion embed to the logs channel with cycle counts and exact study durations.
+### B. Gamified Milestone Roles
+Roles are awarded automatically when thresholds are passed. A celebration embed is sent to the Celebration Channel.
 
-### 4. Slash Commands and User Interface
-- **`/stats`**: Displays the user's all-time, weekly, daily, and doubt stats, as well as their daily streak, next milestone progress, and tracked subject hours.
-- **`/goal`**: Allows setting a personal daily study goal.
-- **`/lb`**: Spawns an interactive leaderboard embed (buttons to switch between All-Time, Weekly, Daily, Doubts, and Messages).
-- **`/leaderboard`**: A duplicate slash command allowing users to quickly summon the leaderboard in any channel.
-- **`/heatmap`**: Renders a GitHub-style activity heatmap using Unicode blocks (🟩🟨⬛) showing study activity over the last year, replicating the YPT calendar feel.
-- **`/whostudying`**: Lists who is currently in study or doubt channels and how long they've been there.
-- **`/compare`**: Head-to-head comparison between two users' stats.
-- **`/weeklygraph`**: Automatically generates a matplotlib bar chart (`weekly_graph.png`) of the last 7 days of study and sends it to the user.
+**1. Pure Study Roles (Awarded for total focused study hours)**
+These roles represent your overall dedication to studying. They are awarded based on raw hours spent in the Study Room or Group Pomodoro.
+- **5 hours:** `1514208595737182338` (🥉 Bronze Scholar) — *Context: You've taken the first steps. The journey has just begun.*
+- **25 hours:** `1514208694051672195` (🥈 Silver Grinder) — *Context: You're starting to build a solid habit. Consistency is key.*
+- **50 hours:** `1514210766256082954` (🥇 Gold Grinder) — *Context: A true milestone. You've proven your dedication to the grind.*
+- **100 hours:** `1514208770887127192` (💎 Diamond Grindmaster) — *Context: Elite tier. Few make it this far. You are a master of focus.*
+- **200 hours:** `1514208898406416505` (👑 Legendary Studier) — *Context: The absolute pinnacle. You are a legend of the server.*
 
-### 5. Automated Background Tasks
-- **Presence Rotation:** Cycles the bot's rich presence (e.g., "Watching Valence study", "Tracking 2 users").
-- **Weekly Reset:** Clears weekly stats every Monday morning automatically.
-- **Pomodoro Status Loop:** Maintains the API-driven voice channel status (Study/Break countdowns).
-- **Weekly Graph DM (`weekly_graph_dm_loop`):** Set to automatically generate and send the `matplotlib` study graphs to all users via DM every Sunday at 9 PM IST.
+**2. Doubt Roles (Awarded for total doubt session hours)**
+These roles represent your collaborative effort in asking questions and solving problems with others in Doubt channels.
+- **2 hours:** `1514228187352268830` (🔰 Doubt Beginner) — *Context: You're starting to engage and ask the right questions.*
+- **5 hours:** `1514238409449930752` (🧠 Doubt Explorer) — *Context: You're actively exploring complex topics with your peers.*
+- **10 hours:** `1514238834559291563` (💡 Doubt Master) — *Context: You've mastered the art of collaborative problem-solving.*
+- **25 hours:** `1514238964008226988` (🎓 Doubt Professor) — *Context: You're essentially teaching the material at this point.*
+- **50 hours:** `1514254737372090438` (🧿 Never Had a Doubt in Life) — *Context: You transcend confusion. You are the ultimate academic authority.*
 
-### 6. Keep-Alive and Stability
-- Contains a lightweight `aiohttp` web server running on port 8080.
-- Implements **Crash Recovery**: On boot (`on_ready`), the bot checks `study_data.json` for orphaned sessions (where the bot crashed while a user was still in a voice channel) and automatically resets them to prevent corrupted 100-hour sessions.
+**3. Text Activity Roles (Awarded for messages sent in `Study Discussion`)**
+These roles represent your active participation in text-based study discussions.
+- **50 messages:** `1514254760386236496` (📝 Active Learner) — *Context: You're participating and making your voice heard.*
+- **200 messages:** `1514255291578056714` (💬 Discussion Pro) — *Context: A regular contributor. You keep the academic conversation flowing.*
+- **500 messages:** `1514255438093484083` (🗣️ Knowledge Sharer) — *Context: A pillar of the community. Always there to share insights.*
+- **1000 messages:** `1514255518288576672` (📖 Study Sage) — *Context: The wise elder of the text channels. Your word is law.*
 
-## Cog Modules (Gemini Extensions)
+---
 
-### 7. Discipline Cog (`cogs/discipline.py`)
-A daily discipline enforcement system that runs automatically at midnight IST.
+## 3. Channel Mapping & Functionality
 
-- **Daily Check Loop:** Runs every 10 minutes. At midnight IST, it checks each user's study time for the previous day.
-- **Zero-Hour Punishment:** If a user studied 0 hours the previous day:
-  - They receive a harsh DM embed showing their 0 hours vs. their partner's hours.
-  - A "discipline strike" is added to their record.
-- **Strike System:**
-  - **Strike 1-2:** DM warning with strike count.
-  - **Strike 3:** Public warning posted in General channel that the user will be kicked if they don't study today.
-  - **Strike 4:** Auto-kick from the server with a public announcement.
-- **Strike Reset:** If a user studies any amount on a given day, their strikes reset to 0.
-- **Target Users:** Valence (856485470171299891) and Ujjwal (1403716456025165864).
+### A. Study Channels
+- **`1514208313452007514` (Study Room)**
+  - Full tracking. Counts toward all study milestones, daily goals, streaks, heatmaps, and leaderboard.
+  - Automatically updates the bot's Rich Presence (e.g., "Watching Valence study").
 
-### 8. Gaming Cog (`cogs/gaming.py`)
-A competitive gaming tracker for board game breaks between study sessions.
+### B. Group Pomodoro Voice Channel
+- **`1514244606827561171`**
+  - Uses an **absolute clock** locked to Unix epoch time to maintain a 24/7 continuous cycle of 60 minutes study followed by 10 minutes break.
+  - The bot updates the channel's API voice status text every 30 seconds (e.g., "🔴 Study Time — 45:00 left").
+  - The bot calculates exact study time based on when the user was present during the "study" phase, discarding all "break" phase minutes.
+  - Sends Pings/Alerts into the Log channel when the phase transitions.
+  - If a user joins this while running an individual `/pomodoro start`, the individual timer is auto-cancelled to enforce group sync.
 
-- **`/link_chess`**: Links a user's Lichess or Chess.com account for auto-tracking.
-- **`/game_match`**: Manually starts a game match between two users (any game/format).
-- **`/game_result`**: Manually records the winner/loser of a game. Updates win/loss stats in `study_data.json`.
-- **Voice Channel Listener:** When a user joins a game voice channel (Chess, Shogi, GO, Checkers), the bot sends a message prompting them to use `/game_match`.
-- **Lichess Auto-Poll (`chess_poll_loop`):** Every 5 minutes, polls the Lichess API for the latest game between the two linked users. If a new game is found, it auto-resolves the result and posts an announcement. Maintains a list of processed game IDs to avoid duplicates.
-- **Game Channels Tracked:**
-  - Chess (1514624613743857775)
-  - Shogi (1514624657935044738)
-  - GO (1514624725102628945)
-  - Checkers (1514624781692178683)
+### C. Doubt Channels
+- **`1514222394628112536` (Test Discussion stuff)**
+- **`1514186752301076510` (Doubt #1)**
+- **`1514221019005714462` (Doubt #2)**
+- **`1514221629864149084` (Doubt #3)**
+  - Tracked separately. Adds up to `total_seconds_doubt`.
+  - Upon leaving, posts a log embed featuring an **interactive Dropdown Menu** for the user to select the subject tag:
+    - 🧪 Physics | ⚗️ Chemistry | 📐 Maths | 🧬 Biology | 💻 CS | 🌍 General
+  - Selections permanently increment the user's `subject_hours` tracking.
+
+### D. Discussion Channels (Voice)
+- **`1514187630374289418` (General)**
+  - Logs the session for the record, but does NOT grant any points, leaderboard ranking, or milestones.
+
+### E. Text Channels (Tracking)
+- **`1514241642415001610` (Study Discussion)**
+  - The bot tracks the number of messages sent here.
+  - Has a 3-second anti-spam cooldown limit.
+
+---
+
+## 4. Bot Slash Commands
+
+1. **`/stats`**: Renders a comprehensive personal profile embed showing All-Time/Weekly/Daily study time, Doubt hours, Current Streak, Next Milestone progress bar, and Subject Breakdown hours.
+2. **`/goal [minutes]`**: Set a personal daily study goal.
+3. **`/lb`**: Spawns the persistent interactive Leaderboard embed. Features 5 buttons to toggle views between: `All-Time`, `Weekly`, `Daily`, `Doubts`, and `Messages`.
+4. **`/leaderboard`**: Identical to `/lb`, allows summoning the leaderboard view into any text channel instantly.
+5. **`/heatmap`**: Renders a GitHub-style calendar using Unicode blocks (🟩🟨⬛). The bot tracks `daily_history` internally per user to build a 52-week map of study activity intensity, perfectly replicating YPT.
+6. **`/whostudying`**: Lists who is currently in a voice channel, what type of channel it is, and for how long.
+7. **`/compare [user]`**: Head-to-head embed comparing your stats to the target user (e.g., Valence vs Ujjwal).
+8. **`/pomodoro start [study_min] [break_min]`**: Starts a custom personal timer in the background. The bot DMs the user when phases change. 
+9. **`/pomodoro stop`**: Prematurely ends the personal timer and logs the results.
+10. **`/pomodoro status`**: Shows a combined view of both the Group Pomodoro absolute clock and the user's personal timer clock.
+11. **`/weeklygraph`**: Immediately generates a `matplotlib` bar chart image of the last 7 days of study hours and sends it via DM.
+
+---
+
+## 5. Automated Background Tasks
+- **`presence_rotation_loop`**: Cycles the bot's custom status message.
+- **`check_weekly_reset`**: Runs every Monday to wipe `total_seconds_weekly` and `messages_weekly` so the leaderboards reset.
+- **`pomodoro_status_loop`**: Updates the Group Pomodoro voice channel status every 30 seconds.
+- **`weekly_graph_dm_loop`**: Every Sunday at 9 PM IST, automatically triggers `matplotlib` graph generation and sends the weekly breakdown graph directly to users' DMs.
+
+---
+
+## 6. Data Structure (`study_data.json`)
+The bot automatically maintains this schema for every tracked user:
+- `total_seconds_alltime`, `total_seconds_weekly`, `total_seconds_today`
+- `total_seconds_doubt`, `total_seconds_discussion`
+- `longest_session_seconds`, `best_day_seconds`, `session_count`
+- `streak_current`, `streak_highest`, `last_study_date`
+- `messages_alltime`, `messages_weekly`, `last_message_timestamp`
+- `daily_goal`
+- `daily_history` (Dictionary mapping `YYYY-MM-DD` strings to integer seconds for the Heatmap)
+- `subject_hours` (Dictionary mapping subject tag strings to integer seconds)
