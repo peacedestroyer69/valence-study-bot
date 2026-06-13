@@ -309,11 +309,12 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def setup_hook():
-    try:
-        await bot.load_extension("cogs.discipline")
-        logging.info("Loaded cogs.discipline")
-    except Exception as e:
-        logging.error(f"Failed to load discipline cog: {e}")
+    for cog_name in ["cogs.discipline", "cogs.bonus_features"]:
+        try:
+            await bot.load_extension(cog_name)
+            logging.info(f"Loaded {cog_name}")
+        except Exception as e:
+            logging.error(f"Failed to load {cog_name}: {e}")
 
 bot.setup_hook = setup_hook
 
