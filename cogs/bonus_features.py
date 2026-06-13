@@ -542,6 +542,231 @@ class BonusFeaturesCog(commands.Cog):
     async def before_touch_grass(self):
         await self.bot.wait_until_ready()
 
+    # ==================================================================
+    # COMMAND: /whowon — Live weekly duel status
+    # ==================================================================
+    @app_commands.command(name="whowon", description="See who's winning the weekly duel right now!")
+    async def whowon_command(self, interaction: discord.Interaction):
+        """Shows the live weekly duel standings."""
+        data = load_data_sync()
+        users = data.get("users", {})
+
+        v_data = users.get(VALENCE_ID, {})
+        u_data = users.get(UJJWAL_ID, {})
+        v_hours = v_data.get("total_seconds_weekly", 0) / 3600
+        u_hours = u_data.get("total_seconds_weekly", 0) / 3600
+        v_name = v_data.get("username", "Valence")
+        u_name = u_data.get("username", "Ujjwal")
+
+        total = v_hours + u_hours
+        if total > 0:
+            v_pct = v_hours / total * 100
+            u_pct = u_hours / total * 100
+        else:
+            v_pct = u_pct = 50
+
+        # Visual bar
+        bar_len = 20
+        v_bar = int(v_pct / 100 * bar_len)
+        u_bar = bar_len - v_bar
+        bar = "🟦" * v_bar + "🟪" * u_bar
+
+        if v_hours > u_hours:
+            status = f"🏆 **{v_name}** is WINNING by **{v_hours - u_hours:.1f}h**!"
+            color = 0x5865F2
+        elif u_hours > v_hours:
+            status = f"🏆 **{u_name}** is WINNING by **{u_hours - v_hours:.1f}h**!"
+            color = 0xEB459E
+        else:
+            status = "⚔️ It's a **TIE**! Who breaks it first?"
+            color = 0xFEE75C
+
+        # Days left in the week
+        now = datetime.date.today()
+        days_left = (7 - now.weekday()) % 7
+        if days_left == 0:
+            days_left = 7
+
+        embed = discord.Embed(
+            title="⚔️ Weekly Duel — LIVE",
+            description=(
+                f"{status}\n\n"
+                f"🟦 **{v_name}**: **{v_hours:.1f}h** ({v_pct:.0f}%)\n"
+                f"🟪 **{u_name}**: **{u_hours:.1f}h** ({u_pct:.0f}%)\n\n"
+                f"{bar}\n\n"
+                f"📅 **{days_left} day(s)** left this week"
+            ),
+            color=color,
+            timestamp=datetime.datetime.now(datetime.UTC),
+        )
+        embed.set_footer(text="Resets every Monday. May the grind be with you. ⚔️")
+        await interaction.response.send_message(embed=embed)
+
+    # ==================================================================
+    # COMMAND: /flex — Dramatic stats flex
+    # ==================================================================
+    @app_commands.command(name="flex", description="Show off your study stats dramatically!")
+    @app_commands.describe(user="Who's flexing? (defaults to you)")
+    async def flex_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        """Dramatic flex of your best stats."""
+        target = user or interaction.user
+        data = load_data_sync()
+        uid = str(target.id)
+
+        if uid not in data["users"]:
+            await interaction.response.send_message("📭 No data to flex. Study first!", ephemeral=True)
+            return
+
+        udata = data["users"][uid]
+        total_hours = udata.get("total_seconds_alltime", 0) / 3600
+        sessions = udata.get("session_count", 0)
+        best_day = udata.get("best_day_seconds", 0) / 3600
+        longest_session = udata.get("longest_session_seconds", 0) / 3600
+        streak = udata.get("longest_streak_days", 0)
+        weekly_hours = udata.get("total_seconds_weekly", 0) / 3600
+        msgs = udata.get("total_messages", 0)
+
+        # Generate flex tier
+        if total_hours >= 200:
+            tier = "👑 LEGENDARY"
+            tier_msg = "You're not even human anymore. You're a MACHINE."
+        elif total_hours >= 100:
+            tier = "💎 DIAMOND"
+            tier_msg = "Most people WISH they had your discipline."
+        elif total_hours >= 50:
+            tier = "🥇 GOLD"
+            tier_msg = "You're in the top tier. Keep pushing."
+        elif total_hours >= 25:
+            tier = "🥈 SILVER"
+            tier_msg = "Solid grinder. The next milestone awaits."
+        elif total_hours >= 5:
+            tier = "🥉 BRONZE"
+            tier_msg = "You've started. Now don't stop."
+        else:
+            tier = "📖 BEGINNER"
+            tier_msg = "Everyone starts somewhere. Keep going."
+
+        accent = USER_COLORS.get(target.id, DEFAULT_COLOR)
+        embed = discord.Embed(
+            title=f"💪 {target.display_name}'s FLEX",
+            description=f"## {tier}\n*{tier_msg}*",
+            color=accent,
+            timestamp=datetime.datetime.now(datetime.UTC),
+        )
+        embed.add_field(name="📚 Total Study", value=f"**{total_hours:.1f}h**", inline=True)
+        embed.add_field(name="📅 This Week", value=f"**{weekly_hours:.1f}h**", inline=True)
+        embed.add_field(name="🎯 Sessions", value=f"**{sessions}**", inline=True)
+        embed.add_field(name="🏆 Best Day", value=f"**{best_day:.1f}h**", inline=True)
+        embed.add_field(name="⚡ Longest Session", value=f"**{longest_session:.1f}h**", inline=True)
+        embed.add_field(name="🔥 Best Streak", value=f"**{streak} days**", inline=True)
+        embed.add_field(name="💬 Messages", value=f"**{msgs:,}**", inline=True)
+
+        if target.display_avatar:
+            embed.set_thumbnail(url=target.display_avatar.url)
+        embed.set_footer(text="Numbers don't lie. The grind speaks for itself. 💪")
+        await interaction.response.send_message(embed=embed)
+
+    # ==================================================================
+    # COMMAND: /studytip — Science-backed study techniques
+    # ==================================================================
+    STUDY_TIPS = [
+        ("🧠 Active Recall", "Don't just re-read notes. Close the book and try to recall everything from memory. Studies show this is 3x more effective than passive reading.", "Karpicke & Blunt, 2011"),
+        ("📅 Spaced Repetition", "Review material at increasing intervals: 1 day, 3 days, 1 week, 2 weeks. Your brain consolidates memories better with gaps between reviews.", "Ebbinghaus Forgetting Curve"),
+        ("🎯 Pomodoro Technique", "Study in 25-50 min focused blocks with 5-10 min breaks. Your brain can only maintain deep focus for ~45 min before it needs a reset.", "Francesco Cirillo"),
+        ("✍️ Feynman Technique", "Explain the concept as if teaching a 5-year-old. If you can't explain it simply, you don't understand it well enough.", "Richard Feynman"),
+        ("🔗 Interleaving", "Mix up different subjects/topics in one session instead of doing one subject for hours. This builds stronger neural connections.", "Rohrer & Taylor, 2007"),
+        ("😴 Sleep on It", "Your brain consolidates learning DURING sleep. Study hard, then get 7-8 hours. An all-nighter destroys more than it builds.", "Walker, 'Why We Sleep'"),
+        ("🏃 Exercise Before Study", "20 minutes of cardio before studying increases BDNF (brain-derived neurotrophic factor) — literally grows new brain cells.", "Ratey, 'Spark'"),
+        ("📝 Dual Coding", "Combine words AND visuals. Draw diagrams, mind maps, or flowcharts alongside your notes. Two encoding paths = stronger memory.", "Paivio, 1986"),
+        ("🎵 Binaural Beats", "Listen to 40Hz gamma binaural beats while studying. Research shows it can enhance focus and memory consolidation.", "Colzato et al., 2017"),
+        ("💧 Stay Hydrated", "Even 2% dehydration reduces cognitive performance by 20%. Keep a water bottle on your desk and drink every 30 minutes.", "Adan, 2012"),
+        ("🧘 2-Minute Meditation", "Before a study session, close your eyes and breathe for 2 minutes. This activates your prefrontal cortex (focus center).", "Mindfulness Research"),
+        ("📱 Phone in Another Room", "The mere PRESENCE of your phone on your desk reduces cognitive capacity by 10%, even when it's off.", "Ward et al., 2017"),
+        ("✅ Eat the Frog", "Do the hardest/most boring subject FIRST when your willpower is highest. Willpower depletes throughout the day.", "Brian Tracy"),
+        ("🔄 Practice Testing", "Take practice tests and solve problems WITHOUT looking at solutions first. Struggling to retrieve = stronger learning.", "Dunlosky et al., 2013"),
+    ]
+
+    @app_commands.command(name="studytip", description="Get a science-backed study technique tip.")
+    async def studytip_command(self, interaction: discord.Interaction):
+        """Random study tip with scientific backing."""
+        title, description, source = random.choice(self.STUDY_TIPS)
+        embed = discord.Embed(
+            title=f"{title}",
+            description=f"{description}\n\n📎 *Source: {source}*",
+            color=random.choice([0x5865F2, 0x57F287, 0xFEE75C, 0xEB459E]),
+            timestamp=datetime.datetime.now(datetime.UTC),
+        )
+        embed.set_footer(text="Study smarter, not just harder. 🧠")
+        await interaction.response.send_message(embed=embed)
+
+    # ==================================================================
+    # COMMAND: /predict — Weekly pace prediction
+    # ==================================================================
+    @app_commands.command(name="predict", description="Predict your end-of-week study hours at current pace.")
+    @app_commands.describe(user="Who to predict for (defaults to you)")
+    async def predict_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        """Predicts end-of-week hours based on current pace."""
+        target = user or interaction.user
+        data = load_data_sync()
+        uid = str(target.id)
+
+        if uid not in data["users"]:
+            await interaction.response.send_message("📭 No data yet!", ephemeral=True)
+            return
+
+        udata = data["users"][uid]
+        weekly_secs = udata.get("total_seconds_weekly", 0)
+        weekly_hours = weekly_secs / 3600
+
+        now = datetime.date.today()
+        day_of_week = now.weekday()  # 0=Mon
+        days_passed = day_of_week + 1  # How many days since Monday
+        days_left = 7 - days_passed
+
+        if days_passed > 0:
+            daily_avg = weekly_hours / days_passed
+            predicted = weekly_hours + (daily_avg * days_left)
+        else:
+            daily_avg = 0
+            predicted = 0
+
+        # Determine which milestone they'd hit
+        milestones = {5: "🥉 Bronze", 15: "🥈 Silver", 30: "🥇 Gold", 50: "💎 Diamond", 70: "👑 Legendary"}
+        predicted_role = "📖 None yet"
+        for threshold, name in sorted(milestones.items()):
+            if predicted >= threshold:
+                predicted_role = name
+
+        # Motivational verdict
+        if predicted >= 70:
+            verdict = "🔥 You're on track for LEGENDARY. Don't slow down!"
+        elif predicted >= 50:
+            verdict = "💎 Diamond pace! Push harder for Legendary!"
+        elif predicted >= 30:
+            verdict = "🥇 Solid Gold pace. Can you go higher?"
+        elif predicted >= 15:
+            verdict = "🥈 Silver territory. You can do better."
+        elif predicted >= 5:
+            verdict = "🥉 Bronze pace. Step it up this week."
+        else:
+            verdict = "⚠️ At this rate you won't even get Bronze. GRIND HARDER."
+
+        accent = USER_COLORS.get(target.id, DEFAULT_COLOR)
+        embed = discord.Embed(
+            title=f"🔮 {target.display_name}'s Weekly Prediction",
+            description=(
+                f"📊 **Current**: {weekly_hours:.1f}h in {days_passed} day(s)\n"
+                f"📈 **Daily avg**: {daily_avg:.1f}h/day\n"
+                f"🔮 **Predicted by Sunday**: **{predicted:.1f}h**\n"
+                f"🎯 **Predicted role**: {predicted_role}\n\n"
+                f"{verdict}"
+            ),
+            color=accent,
+            timestamp=datetime.datetime.now(datetime.UTC),
+        )
+        embed.set_footer(text=f"{days_left} day(s) left to change your fate. ⏳")
+        await interaction.response.send_message(embed=embed)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BonusFeaturesCog(bot))
