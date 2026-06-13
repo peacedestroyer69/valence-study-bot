@@ -19,10 +19,7 @@ import os
 import firebase_admin
 from firebase_admin import firestore
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)  # Go up from cogs/ to project root
-_DATA_DIR = os.path.join(os.getenv("LOCALAPPDATA", _PROJECT_DIR), "YPTStudyBot") if os.name == "nt" else _PROJECT_DIR
-DATA_FILE = os.path.join(_DATA_DIR, "study_data.json")
+# DATA_FILE removed, cogs use self.bot database methods
 
 # ---- Channel & User IDs ----
 VALENCE_ID = "856485470171299891"
@@ -42,41 +39,7 @@ STRIKES_TO_KICK = 4
 SERVER_INVITE_LINK = None  # Will be set dynamically in cog_load
 
 
-def load_data_sync():
-    """Synchronous load for the discipline cog from Firestore."""
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            doc_ref = db.collection('bot_data').document('main')
-            doc = doc_ref.get()
-            if doc.exists:
-                return doc.to_dict()
-        except Exception as e:
-            logging.error(f"[DISCIPLINE] Firestore load error: {e}")
-
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}}
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"users": {}}
-
-
-def save_data_sync(data):
-    """Synchronous save for the discipline cog to Firestore."""
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            db.collection('bot_data').document('main').set(data)
-        except Exception as e:
-            logging.error(f"[DISCIPLINE] Firestore save error: {e}")
-
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logging.error(f"[DISCIPLINE] Failed to save data: {e}")
+# Synchronous file load/save functions removed. Using self.bot.load_data() and self.bot.save_data() instead.
 
 
 # ============================================================
@@ -210,7 +173,7 @@ class DisciplineCog(commands.Cog):
 
     async def execute_punishments(self):
         """Check each user's yesterday study hours and apply punishments."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         general_channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
@@ -240,7 +203,7 @@ class DisciplineCog(commands.Cog):
                 # ---- SLACKER DETECTED ----
                 strikes += 1
                 my_data["discipline_strikes"] = strikes
-                save_data_sync(data)
+                await self.bot.save_data(data)
 
                 member = guild.get_member(int(uid_str))
                 other_name = other_user_data.get("username", "your partner")
@@ -313,7 +276,7 @@ class DisciplineCog(commands.Cog):
                 # ---- STUDIED: Reset strikes ----
                 if strikes > 0:
                     my_data["discipline_strikes"] = 0
-                    save_data_sync(data)
+                    await self.bot.save_data(data)
                     logging.info(
                         f"[DISCIPLINE] Reset strikes for {my_data.get('username', uid_str)} "
                         f"(studied {my_seconds/3600:.1f}h yesterday)"
@@ -356,7 +319,7 @@ class DisciplineCog(commands.Cog):
 
         logging.info(f"[DISCIPLINE] Hourly nag check at {hour}:00 IST")
 
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         general_channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
@@ -454,7 +417,7 @@ class DisciplineCog(commands.Cog):
 
         logging.info("[DISCIPLINE] Running daily absence callout...")
 
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         study_channel = self.bot.get_channel(STUDY_TEXT_CHANNEL_ID)
