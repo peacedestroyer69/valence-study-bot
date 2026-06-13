@@ -23,9 +23,29 @@ import os
 import logging
 import random
 
+import firebase_admin
+from firebase_admin import credentials, firestore
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+# --- Firebase Init ---
+try:
+    cred_json = os.getenv("FIREBASE_CREDENTIALS")
+    if cred_json:
+        cred_dict = json.loads(cred_json)
+        cred = credentials.Certificate(cred_dict)
+        # Avoid double initialization during hot reloads
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        logging.info("Firebase initialized successfully from ENV.")
+    else:
+        db = None
+        logging.warning("FIREBASE_CREDENTIALS not found. Falling back to local JSON.")
+except Exception as e:
+    db = None
+    logging.error(f"Failed to initialize Firebase: {e}")
 
 # --- Secrets from .env ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -253,7 +273,23 @@ def format_mm_ss(seconds: int) -> str:
 
 
 async def load_data() -> dict:
-    """Reads and returns the JSON data, initializes file if missing."""
+    """Reads and returns the JSON data from Firestore, falls back to local JSON if missing."""
+    if db:
+        try:
+            # Using to_thread for synchronous firestore calls to avoid blocking event loop
+            def fetch_doc():
+                doc_ref = db.collection('bot_data').document('main')
+                doc = doc_ref.get()
+                if doc.exists:
+                    return doc.to_dict()
+                else:
+                    data = _default_data()
+                    doc_ref.set(data)
+                    return data
+            return await asyncio.to_thread(fetch_doc)
+        except Exception as e:
+            logging.error(f"Firestore read error: {e}. Falling back to local.")
+            
     try:
         if not os.path.exists(DATA_FILE):
             data = _default_data()
@@ -278,7 +314,15 @@ async def load_data() -> dict:
 
 
 async def save_data(data: dict):
-    """Acquires the asyncio.Lock, writes JSON with indent=2, releases the lock."""
+    """Saves data to Firestore and local JSON file."""
+    if db:
+        try:
+            def push_doc():
+                db.collection('bot_data').document('main').set(data)
+            await asyncio.to_thread(push_doc)
+        except Exception as e:
+            logging.error(f"Firestore write error: {e}")
+            
     async with data_lock:
         try:
             with open(DATA_FILE, "w", encoding="utf-8") as f:

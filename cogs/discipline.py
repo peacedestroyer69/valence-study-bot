@@ -16,6 +16,9 @@ import logging
 import json
 import os
 
+import firebase_admin
+from firebase_admin import firestore
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)  # Go up from cogs/ to project root
 _DATA_DIR = os.path.join(os.getenv("LOCALAPPDATA", _PROJECT_DIR), "YPTStudyBot") if os.name == "nt" else _PROJECT_DIR
@@ -40,7 +43,17 @@ SERVER_INVITE_LINK = None  # Will be set dynamically in cog_load
 
 
 def load_data_sync():
-    """Synchronous load for the discipline cog."""
+    """Synchronous load for the discipline cog from Firestore."""
+    if firebase_admin._apps:
+        try:
+            db = firestore.client()
+            doc_ref = db.collection('bot_data').document('main')
+            doc = doc_ref.get()
+            if doc.exists:
+                return doc.to_dict()
+        except Exception as e:
+            logging.error(f"[DISCIPLINE] Firestore load error: {e}")
+
     if not os.path.exists(DATA_FILE):
         return {"users": {}}
     try:
@@ -51,7 +64,14 @@ def load_data_sync():
 
 
 def save_data_sync(data):
-    """Synchronous save for the discipline cog."""
+    """Synchronous save for the discipline cog to Firestore."""
+    if firebase_admin._apps:
+        try:
+            db = firestore.client()
+            db.collection('bot_data').document('main').set(data)
+        except Exception as e:
+            logging.error(f"[DISCIPLINE] Firestore save error: {e}")
+
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
