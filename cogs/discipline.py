@@ -73,7 +73,7 @@ TOXIC_MESSAGES = [
 
 # ============================================================
 # HOURLY NAGGING MESSAGES (2 PM to 10 PM IST, escalating)
-# Starts gentle at 2 PM, gets increasingly aggressive toward 10 PM
+# Used on REGULAR days (Mon, Tue, Thu, Fri)
 # ============================================================
 HOURLY_NAG_MESSAGES = {
     14: "📖 It's 2 PM. Afternoon's here — perfect time to start a study session. Don't waste it.",
@@ -86,6 +86,25 @@ HOURLY_NAG_MESSAGES = {
     21: "🚨 **9 PM.** This is your LAST WARNING before the day is over. Get your ass in a study channel or accept that you're a failure today. **{other_name}** did **{other_today:.1f}h**. You did **{my_today:.1f}h**. PATHETIC.",
     22: "☠️ **10 PM. The day is basically over.** You had 18 hours to study and you chose to waste them. **{other_name}**: **{other_today:.1f}h**. You: **{my_today:.1f}h**. Tomorrow better be different or you're getting KICKED.",
 }
+
+# ============================================================
+# OFF-DAY MORNING NAG MESSAGES (6 AM to 1 PM IST)
+# Used ONLY on off days (Wed, Sat, Sun) — PW schedule
+# Focused on waking up and getting started early
+# ============================================================
+OFF_DAYS = {2, 5, 6}  # Wednesday=2, Saturday=5, Sunday=6
+
+OFF_DAY_MORNING_MESSAGES = {
+    6:  "🌅 **6 AM. It's your OFF DAY.** The best students use off days to get AHEAD. Wake up. Get out of bed. Start before everyone else.",
+    7:  "⏰ **7 AM — WAKE UP.** You're burning daylight. Off day doesn't mean lazy day. **{other_name}** might already be up. Don't fall behind.",
+    8:  "☀️ **8 AM.** Still in bed? That's 2 hours of potential study GONE. Your competitors are already at their desks. **GET. UP. NOW.**",
+    9:  "😤 **9 AM and you haven't started?!** That's 3 hours wasted. Off day = BONUS study time, not sleep-all-day time. **{other_name}** has **{other_today:.1f}h** already.",
+    10: "🔥 **10 AM.** If you're not studying by now, you're choosing to lose. It's your OFF DAY — you have NO excuses today. Zero. **{other_name}**: **{other_today:.1f}h**. You: **{my_today:.1f}h**.",
+    11: "💀 **11 AM — HALF THE MORNING IS GONE.** Every hour you sleep in is an hour **{other_name}** uses to get ahead. They have **{other_today:.1f}h** today. You have **{my_today:.1f}h**. Disgusting.",
+    12: "🚨 **IT'S NOON.** You've wasted the ENTIRE morning of your off day. 6 hours of potential study — GONE. **{other_name}**: **{other_today:.1f}h**. You: **{my_today:.1f}h**. What are you even doing?",
+    13: "☠️ **1 PM on your OFF DAY and you've done {my_today:.1f}h.** That's pathetic. **{other_name}** has **{other_today:.1f}h**. You had since 6 AM. The afternoon is your LAST CHANCE to salvage today.",
+}
+
 
 # ============================================================
 # KICK DM MESSAGE (sent right before kicking)
@@ -281,12 +300,15 @@ class DisciplineCog(commands.Cog):
                     )
 
     # ==================================================================
-    # TASK 2: HOURLY NAGGING (2 PM - 10 PM IST)
+    # TASK 2: HOURLY NAGGING
+    # Off days (Wed/Sat/Sun): 6 AM - 10 PM IST
+    # Regular days (Mon/Tue/Thu/Fri): 2 PM - 10 PM IST
     # ==================================================================
     @tasks.loop(minutes=5)
     async def hourly_nag_check(self):
-        """Checks every 5 minutes. At the top of each hour from 2-10 PM IST,
-        sends a DM to anyone not currently in a study voice channel."""
+        """Checks every 5 minutes. Sends nag DMs based on schedule:
+        - Off days (Wed/Sat/Sun): 6 AM to 10 PM IST (wake-up + study)
+        - Regular days (Mon/Tue/Thu/Fri): 2 PM to 10 PM IST"""
         now_utc = datetime.datetime.now(datetime.UTC)
         ist_offset = datetime.timedelta(hours=5, minutes=30)
         now_ist = now_utc + ist_offset
@@ -296,7 +318,14 @@ class DisciplineCog(commands.Cog):
             return
 
         hour = now_ist.hour
-        if hour not in HOURLY_NAG_MESSAGES:
+        is_off_day = now_ist.weekday() in OFF_DAYS
+
+        # Pick the right message based on day type and hour
+        if is_off_day and hour in OFF_DAY_MORNING_MESSAGES:
+            msg_template = OFF_DAY_MORNING_MESSAGES[hour]
+        elif hour in HOURLY_NAG_MESSAGES:
+            msg_template = HOURLY_NAG_MESSAGES[hour]
+        else:
             return
 
         # Prevent double-firing: use a simple attribute flag
@@ -314,8 +343,6 @@ class DisciplineCog(commands.Cog):
         if not general_channel:
             return
         guild = general_channel.guild
-
-        msg_template = HOURLY_NAG_MESSAGES[hour]
 
         for uid_str in [VALENCE_ID, UJJWAL_ID]:
             if uid_str not in users:
@@ -347,11 +374,30 @@ class DisciplineCog(commands.Cog):
                     my_today=my_today,
                 )
 
-                # Color gets more red as the evening progresses
-                colors = {14: 0x57F287, 15: 0xA3BE8C, 16: 0xFEE75C, 17: 0xFFA500, 18: 0xFF8C00, 19: 0xFF4500, 20: 0xFF0000, 21: 0xCC0000, 22: 0x8B0000}
+                # Color escalates: morning=blue/green, afternoon=yellow, evening=red
+                colors = {
+                    6: 0x3498DB, 7: 0x2980B9, 8: 0x57F287, 9: 0xA3BE8C,
+                    10: 0xFEE75C, 11: 0xFFA500, 12: 0xFF8C00, 13: 0xFF4500,
+                    14: 0x57F287, 15: 0xA3BE8C, 16: 0xFEE75C, 17: 0xFFA500,
+                    18: 0xFF8C00, 19: 0xFF4500, 20: 0xFF0000, 21: 0xCC0000, 22: 0x8B0000,
+                }
+
+                # Title changes based on time of day
+                if hour < 10:
+                    title_emoji = "🌅"
+                    title_text = "WAKE UP & STUDY"
+                elif hour < 14:
+                    title_emoji = "☀️"
+                    title_text = "Are You Studying Yet?"
+                elif hour < 19:
+                    title_emoji = "⏰"
+                    title_text = "Are You Studying?"
+                else:
+                    title_emoji = "🚨"
+                    title_text = "LAST CHANCE"
 
                 embed = discord.Embed(
-                    title=f"{'⏰' if hour < 19 else '🚨'} {hour}:00 — Are You Studying?",
+                    title=f"{title_emoji} {hour}:00 — {title_text}",
                     description=formatted_msg,
                     color=colors.get(hour, 0xFF0000),
                 )
