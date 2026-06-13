@@ -98,6 +98,7 @@ TEXT_MILESTONE_ROLES = {
     150: 1514255518288576672,  # 📖 Study Sage (150 msgs/week)
 }
 
+
 # --- Pomodoro Configuration ---
 POMODORO_CHANNEL_ID = 1514244606827561171  # Group Pomodoro voice channel
 POMODORO_STUDY_SECONDS = 60 * 60  # 60 minutes study
@@ -198,20 +199,15 @@ def _default_user(username: str) -> dict:
         # Study Enforcer tracking
         "consecutive_missed_days": 0,
         "last_enforcer_warning": None,
-        # Game Master tracking
-        "chesscom_username": None,
-        "lichess_username": None,
-        "total_game_break_seconds": 0,
     }
 
 
 def get_channel_type(channel_id: int) -> str:
-    """Returns the channel category: 'study', 'doubt', 'discussion', or 'study' (default)."""
+    """Returns the channel category: 'study', 'doubt', or 'discussion'."""
     if channel_id in DOUBT_CHANNELS:
         return "doubt"
     if channel_id in DISCUSSION_CHANNELS:
         return "discussion"
-    # Default: treat all unlisted channels as study channels too
     return "study"
 
 
@@ -1132,6 +1128,7 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
 
         # Remove ALL milestone roles first, then add only the highest
         all_milestone_role_ids = set(MILESTONE_ROLES.values())
+        already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
         roles_to_remove = [r for r in member.roles if r.id in all_milestone_role_ids]
         if roles_to_remove:
             try:
@@ -1146,7 +1143,6 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                 logging.warning(f"Milestone role {earned_role_id} not found in guild.")
                 return
 
-            already_has = discord.utils.get(member.roles, id=earned_role_id)
             try:
                 await member.add_roles(role, reason=f"YPT milestone: {earned_threshold}h this week")
             except discord.Forbidden:
@@ -1202,6 +1198,7 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
 
         # Remove ALL doubt milestone roles first
         all_doubt_role_ids = set(DOUBT_MILESTONE_ROLES.values())
+        already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
         roles_to_remove = [r for r in member.roles if r.id in all_doubt_role_ids]
         if roles_to_remove:
             try:
@@ -1216,7 +1213,6 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                 logging.warning(f"Doubt role {earned_role_id} not found in guild.")
                 return
 
-            already_has = discord.utils.get(member.roles, id=earned_role_id)
             try:
                 await member.add_roles(role, reason=f"YPT doubt milestone: {earned_threshold}h")
             except discord.Forbidden:
@@ -1331,14 +1327,12 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             return
 
         ch_type = get_channel_type(channel.id)
+        real_start_ts = start_ts  # Save BEFORE clearing
         udata["session_start_timestamp"] = None
 
         if channel.id == POMODORO_CHANNEL_ID:
             # --- GROUP POMODORO: calculate study time excluding breaks ---
-            start_ts = udata.get("session_start_timestamp")
-            if start_ts is None:
-                start_ts = int(time.time()) - session_seconds
-            study_secs = calculate_pomodoro_study_seconds(start_ts, int(time.time()))
+            study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
 
             if study_secs >= MIN_SESSION_SECONDS:
                 udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
@@ -1360,7 +1354,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                 update_streak(udata)
                 await save_data(data)
 
-                total_time_in_channel = int(time.time()) - start_ts
+                total_time_in_channel = int(time.time()) - real_start_ts
                 break_secs = total_time_in_channel - study_secs
 
                 logging.info(f"[POMODORO END] {member.display_name} -- {format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}")
@@ -1445,46 +1439,51 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if message.channel.id not in STUDY_TEXT_CHANNELS:
-        return
+    # Track messages in study text channels
+    if message.channel.id in STUDY_TEXT_CHANNELS:
+        try:
+            data = await load_data()
+            udata = ensure_user(data, message.author)
+            udata["total_messages"] = udata.get("total_messages", 0) + 1
+            udata["messages_today"] = udata.get("messages_today", 0) + 1
+            udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
+            await save_data(data)
 
-    try:
-        data = await load_data()
-        udata = ensure_user(data, message.author)
-        udata["total_messages"] = udata.get("total_messages", 0) + 1
-        udata["messages_today"] = udata.get("messages_today", 0) + 1
-        udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
-        await save_data(data)
+            # Award text milestone roles (only highest, remove lower)
+            total_msgs = udata.get("messages_weekly", 0)
+            guild = message.guild
+            if guild:
+                member = guild.get_member(message.author.id)
+                if member:
+                    earned_role_id = None
+                    for threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
+                        if total_msgs >= threshold:
+                            earned_role_id = TEXT_MILESTONE_ROLES[threshold]
 
-        # Award text milestone roles (only highest, remove lower)
-        total_msgs = udata.get("messages_weekly", 0)
-        guild = message.guild
-        if guild:
-            member = guild.get_member(message.author.id)
-            if member:
-                earned_role_id = None
-                for threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
-                    if total_msgs >= threshold:
-                        earned_role_id = TEXT_MILESTONE_ROLES[threshold]
+                    # Check BEFORE removal to avoid celebration spam
+                    already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
 
-                # Remove all text milestone roles, then add highest
-                all_text_role_ids = set(TEXT_MILESTONE_ROLES.values())
-                roles_to_remove = [r for r in member.roles if r.id in all_text_role_ids]
-                if roles_to_remove:
-                    try:
-                        await member.remove_roles(*roles_to_remove, reason="Text milestone update")
-                    except Exception:
-                        pass
-
-                if earned_role_id:
-                    role = guild.get_role(earned_role_id)
-                    if role and not discord.utils.get(member.roles, id=earned_role_id):
+                    # Remove all text milestone roles, then add highest
+                    all_text_role_ids = set(TEXT_MILESTONE_ROLES.values())
+                    roles_to_remove = [r for r in member.roles if r.id in all_text_role_ids]
+                    if roles_to_remove:
                         try:
-                            await member.add_roles(role, reason=f"Text milestone: {total_msgs} messages")
+                            await member.remove_roles(*roles_to_remove, reason="Text milestone update")
                         except Exception:
                             pass
-    except Exception as e:
-        logging.error(f"Error tracking message from {message.author.display_name}: {e}")
+
+                    if earned_role_id:
+                        role = guild.get_role(earned_role_id)
+                        if role:
+                            try:
+                                await member.add_roles(role, reason=f"Text milestone: {total_msgs} msgs/week")
+                            except Exception:
+                                pass
+        except Exception as e:
+            logging.error(f"Error tracking message from {message.author.display_name}: {e}")
+
+    # Allow prefix commands to still work
+    await bot.process_commands(message)
 
 
 # ============================================================
@@ -2592,169 +2591,6 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
 
 
 # ============================================================
-# SECTION 12c: GAME MASTER (BREAK TIME INTEGRATION)
-# ============================================================
-
-@bot.tree.command(name="link", description="Link your Chess.com or Lichess account for automatic break-time tracking.")
-@app_commands.describe(
-    platform="Choose the platform",
-    username="Your username on that platform"
-)
-@app_commands.choices(platform=[
-    app_commands.Choice(name="Chess.com", value="chesscom"),
-    app_commands.Choice(name="Lichess", value="lichess"),
-])
-async def link_account(interaction: discord.Interaction, platform: str, username: str):
-    """Links a user's chess account to the bot."""
-    try:
-        data = await load_data()
-        uid = str(interaction.user.id)
-        if uid not in data["users"]:
-            data["users"][uid] = _default_user(interaction.user.display_name)
-            
-        if platform == "chesscom":
-            data["users"][uid]["chesscom_username"] = username
-        elif platform == "lichess":
-            data["users"][uid]["lichess_username"] = username
-            
-        await save_data(data)
-        await interaction.response.send_message(f"✅ Successfully linked your **{platform}** account to **{username}**!", ephemeral=True)
-    except Exception as e:
-        logging.error(f"Link account error: {e}")
-        await interaction.response.send_message("❌ An error occurred while linking your account.", ephemeral=True)
-
-
-@bot.tree.command(name="challenge", description="Challenge someone to a game (Break Time)")
-@app_commands.describe(
-    opponent="The user you want to play against",
-    game="What game are you playing?",
-    time_control="E.g., 5|0 blitz"
-)
-@app_commands.choices(game=[
-    app_commands.Choice(name="Chess", value="chess"),
-    app_commands.Choice(name="Shogi", value="shogi"),
-    app_commands.Choice(name="GO", value="go"),
-    app_commands.Choice(name="Checkers", value="checkers"),
-])
-async def challenge_command(interaction: discord.Interaction, opponent: discord.Member, game: str, time_control: str = "Standard"):
-    """Starts a game match between two users."""
-    try:
-        embed = discord.Embed(
-            title=f"🎮 Break Time Challenge!",
-            description=f"<@{interaction.user.id}> has challenged <@{opponent.id}> to a game of **{game.capitalize()}**!\n\n**Format:** {time_control}",
-            color=0xE74C3C
-        )
-        embed.set_footer(text="Good luck! Don't forget to head back to studying afterwards.")
-        
-        data = await load_data()
-        # Add basic info about accounts if linked
-        uid_self = str(interaction.user.id)
-        uid_opp = str(opponent.id)
-        
-        p1_acc = data["users"].get(uid_self, {}).get("chesscom_username") or data["users"].get(uid_self, {}).get("lichess_username")
-        p2_acc = data["users"].get(uid_opp, {}).get("chesscom_username") or data["users"].get(uid_opp, {}).get("lichess_username")
-        
-        if p1_acc and p2_acc and game == "chess":
-            embed.add_field(name="Accounts", value=f"{interaction.user.display_name}: {p1_acc}\n{opponent.display_name}: {p2_acc}", inline=False)
-            embed.add_field(name="Auto-Tracking", value="Accounts linked! Bot will attempt to fetch results automatically.", inline=False)
-            
-        await interaction.response.send_message(content=f"<@{opponent.id}>", embed=embed)
-    except Exception as e:
-        logging.error(f"Challenge error: {e}")
-
-
-@bot.tree.command(name="poke", description="Poke a user in a game channel to remind them to study.")
-@app_commands.describe(target="The user to poke")
-async def poke_command(interaction: discord.Interaction, target: discord.Member):
-    """Pokes a user to remind them to get back to studying."""
-    try:
-        if target.voice and target.voice.channel:
-            ch_name = target.voice.channel.name
-            await interaction.response.send_message(f"👉 <@{target.id}>, you've been in **{ch_name}** for a while. Are you still playing, or is it time to get back to studying?")
-        else:
-            await interaction.response.send_message(f"<@{target.id}> is not currently in a voice channel.", ephemeral=True)
-    except Exception as e:
-        logging.error(f"Poke error: {e}")
-
-@bot.tree.command(name="gameresult", description="Auto-fetch the latest match result between two linked players from Chess.com.")
-@app_commands.describe(opponent="The user you played against")
-async def gameresult_command(interaction: discord.Interaction, opponent: discord.Member):
-    """Fetches the latest chess.com match between the two linked users."""
-    try:
-        await interaction.response.defer()
-        data = await load_data()
-        uid_self = str(interaction.user.id)
-        uid_opp = str(opponent.id)
-        
-        p1_acc = data["users"].get(uid_self, {}).get("chesscom_username")
-        p2_acc = data["users"].get(uid_opp, {}).get("chesscom_username")
-        
-        if not p1_acc or not p2_acc:
-            await interaction.followup.send("❌ Both players need to `/link` their Chess.com accounts first.")
-            return
-            
-        # Fetch archives for p1
-        async with aiohttp.ClientSession() as session:
-            # Chess.com requires a User-Agent
-            headers = {"User-Agent": "Discord Study Bot / Game Master (Contact: developer@example.com)"}
-            async with session.get(f"https://api.chess.com/pub/player/{p1_acc}/games/archives", headers=headers) as resp:
-                if resp.status != 200:
-                    await interaction.followup.send(f"❌ Failed to fetch data from Chess.com. Status: {resp.status}")
-                    return
-                archives_data = await resp.json()
-                
-        archives = archives_data.get("archives", [])
-        if not archives:
-            await interaction.followup.send("❌ No games found for that user.")
-            return
-            
-        latest_archive_url = archives[-1] # The last month is at the end of the list
-        
-        async with aiohttp.ClientSession() as session:
-            headers = {"User-Agent": "Discord Study Bot / Game Master"}
-            async with session.get(latest_archive_url, headers=headers) as resp:
-                if resp.status != 200:
-                    await interaction.followup.send("❌ Failed to fetch month archive from Chess.com.")
-                    return
-                games_data = await resp.json()
-                
-        games = games_data.get("games", [])
-        # Find the most recent game against p2
-        target_game = None
-        for g in reversed(games): # Look from newest to oldest
-            white = g.get("white", {}).get("username", "").lower()
-            black = g.get("black", {}).get("username", "").lower()
-            if (white == p1_acc.lower() and black == p2_acc.lower()) or (white == p2_acc.lower() and black == p1_acc.lower()):
-                target_game = g
-                break
-                
-        if not target_game:
-            await interaction.followup.send(f"❌ No recent games found between **{p1_acc}** and **{p2_acc}** this month.")
-            return
-            
-        white_player = target_game.get("white", {})
-        black_player = target_game.get("black", {})
-        white_res = white_player.get("result")
-        black_res = black_player.get("result")
-        
-        embed = discord.Embed(
-            title="♟️ Chess Match Result Fetched!",
-            color=0x3498DB
-        )
-        embed.add_field(name="White", value=f"{white_player.get('username')} ({white_res})", inline=True)
-        embed.add_field(name="Black", value=f"{black_player.get('username')} ({black_res})", inline=True)
-        embed.add_field(name="Link", value=f"[View Game]({target_game.get('url')})", inline=False)
-        
-        await interaction.followup.send(embed=embed)
-        
-    except Exception as e:
-        logging.error(f"Game result fetch error: {e}")
-        try:
-            await interaction.followup.send("❌ Error occurred fetching game results.")
-        except:
-            pass
-
-# ============================================================
 # SECTION 13: ENTRY POINT
 # ============================================================
 
@@ -2765,3 +2601,5 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     bot.run(os.getenv("BOT_TOKEN"))
+
+
