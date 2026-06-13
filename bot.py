@@ -1911,17 +1911,18 @@ async def on_ready():
     # Restore/create leaderboard embed
     await update_leaderboard_embed("alltime")
 
-    # Sync slash commands — guild-only (instant, no duplicates)
+    # Sync slash commands — guild-only, then wipe global to kill duplicates
     try:
-        # Clear global commands to remove duplicates
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()  # Push the empty global tree to Discord
-        logging.info("Cleared global commands to prevent duplicates.")
-
+        # Step 1: Copy commands to each guild FIRST (while tree still has them)
         for guild in bot.guilds:
             bot.tree.copy_global_to(guild=guild)
             synced = await bot.tree.sync(guild=guild)
             logging.info(f"Synced {len(synced)} slash command(s) to guild {guild.name}.")
+
+        # Step 2: NOW clear global tree and push empty → removes old global duplicates
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+        logging.info("Cleared global commands to remove duplicates.")
     except Exception as e:
         logging.error(f"Failed to sync slash commands: {e}")
 
