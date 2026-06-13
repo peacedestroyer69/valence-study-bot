@@ -9,14 +9,14 @@ Pushing code to GitHub does NOT automatically make the bot run. You need to conn
 
 ### Step 1: Create a Render Account
 1. Go to https://render.com
-2. Sign up with your GitHub account (the one that owns `fakeujjwal69-blip/valence-study-bot`)
+2. Sign up with your GitHub account (the one that owns `peacedestroyer69/valence-study-bot`)
 
 ### Step 2: Create a New Web Service
 1. Click **"New +"** → **"Web Service"**
 2. Connect your GitHub account if prompted
-3. Select the repository: **`valence-study-bot`**
+3. Select the repository: **`peacedestroyer69/valence-study-bot`**
 4. Configure these settings:
-   - **Name:** `valence-study-bot`
+   - **Name:** `valence-study-bot` (or your preferred service name)
    - **Region:** Pick the closest to India (Singapore)
    - **Branch:** `main`
    - **Runtime:** `Python`
@@ -25,13 +25,14 @@ Pushing code to GitHub does NOT automatically make the bot run. You need to conn
    - **Instance Type:** **Free**
 
 ### Step 3: Add Environment Variables
-In the Render dashboard, go to **"Environment"** tab and add these:
+In the Render dashboard, go to the **"Environment"** tab and add these:
 | Key | Value |
 |-----|-------|
 | `BOT_TOKEN` | Your Discord bot token (the long string starting with `MTUx...`) |
 | `LEADERBOARD_CHANNEL_ID` | `1514208164071870514` |
 | `LOG_CHANNEL_ID` | `1514208220946763807` |
 | `CELEBRATION_CHANNEL_ID` | `1514208252760424591` |
+| `FIREBASE_CREDENTIALS` | Paste the entire JSON content of your Google Cloud Firebase service account key file (e.g. from `C:\Users\ROG\Downloads\valence-study-bot-firebase-adminsdk-fbsvc-20109ed3a1.json`) |
 
 ### Step 4: Deploy
 1. Click **"Create Web Service"**
@@ -44,7 +45,7 @@ Render's free tier sleeps after 15 minutes of no HTTP traffic. The bot has a bui
 2. Click **"Add New Monitor"**
 3. Monitor Type: **HTTP(s)**
 4. Friendly Name: `Valence Bot`
-5. URL: `https://valence-study-bot.onrender.com` (your Render URL)
+5. URL: `https://<your-service-name>.onrender.com` (your actual Render URL, e.g., `https://ypt-study-bot.onrender.com` or `https://valence-study-bot.onrender.com`)
 6. Monitoring Interval: **5 minutes**
 7. Click **"Create Monitor"**
 
@@ -64,6 +65,6 @@ Render's free tier sleeps after 15 minutes of no HTTP traffic. The bot has a bui
 - **Study Logs Channel:** When you join/leave a study voice channel, the bot posts a session summary
 
 ## Common Issues
-- **Bot shows offline:** Check Render logs for errors. Most likely the `BOT_TOKEN` environment variable is wrong.
+- **Bot shows offline:** Check Render logs for errors. Most likely the `BOT_TOKEN` or `FIREBASE_CREDENTIALS` environment variables are wrong or missing.
 - **Slash commands don't show:** Wait 1-2 minutes after first boot for Discord to sync commands globally.
 - **Roles not being assigned:** Make sure the bot's role in Discord is ABOVE the milestone roles in the role hierarchy (Server Settings → Roles → drag the bot role to the top).

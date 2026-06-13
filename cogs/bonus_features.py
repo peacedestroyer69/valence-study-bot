@@ -20,6 +20,8 @@ import json
 import os
 import random
 import time
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)
@@ -45,6 +47,16 @@ DEFAULT_COLOR = 0x2B2D31
 
 
 def load_data_sync():
+    if firebase_admin._apps:
+        try:
+            db = firestore.client()
+            doc_ref = db.collection('bot_data').document('main')
+            doc = doc_ref.get()
+            if doc.exists:
+                return doc.to_dict()
+        except Exception as e:
+            logging.error(f"[BONUS] Firestore load error: {e}")
+
     if not os.path.exists(DATA_FILE):
         return {"users": {}}
     try:
@@ -52,6 +64,21 @@ def load_data_sync():
             return json.load(f)
     except Exception:
         return {"users": {}}
+
+
+def save_data_sync(data):
+    if firebase_admin._apps:
+        try:
+            db = firestore.client()
+            db.collection('bot_data').document('main').set(data)
+        except Exception as e:
+            logging.error(f"[BONUS] Firestore save error: {e}")
+
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        logging.error(f"[BONUS] Failed to save data: {e}")
 
 
 # ============================================================
@@ -303,12 +330,7 @@ class BonusFeaturesCog(commands.Cog):
             if "countdowns" not in data:
                 data["countdowns"] = {}
             data["countdowns"][exam_name] = exam_date
-
-            try:
-                with open(DATA_FILE, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-            except Exception:
-                pass
+            save_data_sync(data)
 
             embed = discord.Embed(
                 title=f"⏳ Countdown Set: {exam_name}",
