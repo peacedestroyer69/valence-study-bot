@@ -15,44 +15,7 @@ import os
 import firebase_admin
 from firebase_admin import firestore
 
-DATA_FILE = "study_data.json"
-
-
-def load_data_sync():
-    """Synchronous load for the gaming cog from Firestore."""
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            doc_ref = db.collection('bot_data').document('main')
-            doc = doc_ref.get()
-            if doc.exists:
-                return doc.to_dict()
-        except Exception as e:
-            logging.error(f"[GAMING] Firestore load error: {e}")
-
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}}
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"users": {}}
-
-
-def save_data_sync(data):
-    """Synchronous save for the gaming cog to Firestore."""
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            db.collection('bot_data').document('main').set(data)
-        except Exception as e:
-            logging.error(f"[GAMING] Firestore save error: {e}")
-
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logging.error(f"[GAMING] Failed to save data: {e}")
+# Top-level DB file operations removed. Using self.bot.load_data() and self.bot.save_data() instead.
 
 
 # Game voice channel IDs
@@ -108,7 +71,7 @@ class GamingCog(commands.Cog):
         platform: app_commands.Choice[str],
         username: str,
     ):
-        data = load_data_sync()
+        data = await self.bot.load_data()
         uid = str(interaction.user.id)
 
         if uid not in data["users"]:
@@ -118,7 +81,7 @@ class GamingCog(commands.Cog):
             data["users"][uid]["chess_accounts"] = {}
 
         data["users"][uid]["chess_accounts"][platform.value] = username
-        save_data_sync(data)
+        await self.bot.save_data(data)
 
         await interaction.response.send_message(
             f"✅ Successfully linked **{platform.name}** account: `{username}`",
@@ -174,7 +137,7 @@ class GamingCog(commands.Cog):
         winner: discord.Member,
         loser: discord.Member,
     ):
-        data = load_data_sync()
+        data = await self.bot.load_data()
 
         for uid in [str(winner.id), str(loser.id)]:
             if uid not in data["users"]:
@@ -184,7 +147,7 @@ class GamingCog(commands.Cog):
 
         data["users"][str(winner.id)]["gaming_wins"] += 1
         data["users"][str(loser.id)]["gaming_losses"] += 1
-        save_data_sync(data)
+        await self.bot.save_data(data)
 
         w_wins = data["users"][str(winner.id)]["gaming_wins"]
         l_wins = data["users"][str(loser.id)]["gaming_wins"]
@@ -213,7 +176,7 @@ class GamingCog(commands.Cog):
         user: discord.Member | None = None,
     ):
         target = user or interaction.user
-        data = load_data_sync()
+        data = await self.bot.load_data()
         uid = str(target.id)
         udata = data.get("users", {}).get(uid, {})
 
@@ -266,7 +229,7 @@ class GamingCog(commands.Cog):
     @tasks.loop(minutes=5)
     async def chess_poll_loop(self):
         """Polls Lichess every 5 minutes for head-to-head matches between Valence and Ujjwal."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         val_data = users.get(VALENCE_ID, {})
@@ -359,7 +322,7 @@ class GamingCog(commands.Cog):
                     # Mark game as processed (keep last 50)
                     processed_games.append(game_id)
                     data["processed_chess_games"] = processed_games[-50:]
-                    save_data_sync(data)
+                    await self.bot.save_data(data)
 
                     logging.info(
                         f"[GAMING] Auto-resolved Lichess game {game_id}: "
