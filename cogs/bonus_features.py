@@ -23,10 +23,7 @@ import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)
-_DATA_DIR = os.path.join(os.getenv("LOCALAPPDATA", _PROJECT_DIR), "YPTStudyBot") if os.name == "nt" else _PROJECT_DIR
-DATA_FILE = os.path.join(_DATA_DIR, "study_data.json")
+# DATA_FILE removed, cogs use self.bot database methods
 
 # ---- Channel & User IDs ----
 VALENCE_ID = "856485470171299891"
@@ -46,39 +43,7 @@ USER_COLORS = {
 DEFAULT_COLOR = 0x2B2D31
 
 
-def load_data_sync():
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            doc_ref = db.collection('bot_data').document('main')
-            doc = doc_ref.get()
-            if doc.exists:
-                return doc.to_dict()
-        except Exception as e:
-            logging.error(f"[BONUS] Firestore load error: {e}")
-
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}}
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"users": {}}
-
-
-def save_data_sync(data):
-    if firebase_admin._apps:
-        try:
-            db = firestore.client()
-            db.collection('bot_data').document('main').set(data)
-        except Exception as e:
-            logging.error(f"[BONUS] Firestore save error: {e}")
-
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logging.error(f"[BONUS] Failed to save data: {e}")
+# Synchronous file load/save functions removed. Using self.bot.load_data() and self.bot.save_data() instead.
 
 
 # ============================================================
@@ -157,7 +122,7 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.command(name="serverstats", description="View total server study statistics.")
     async def serverstats_command(self, interaction: discord.Interaction):
         """Shows aggregate server study stats."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         total_alltime = 0
@@ -243,7 +208,7 @@ class BonusFeaturesCog(commands.Cog):
     async def history_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Shows the last 10 days of study activity."""
         target = user or interaction.user
-        data = load_data_sync()
+        data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
@@ -309,7 +274,7 @@ class BonusFeaturesCog(commands.Cog):
         exam_date: str | None = None,
     ):
         """Sets or displays an exam countdown."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
 
         if exam_name and exam_date:
             # Setting a new countdown
@@ -330,7 +295,7 @@ class BonusFeaturesCog(commands.Cog):
             if "countdowns" not in data:
                 data["countdowns"] = {}
             data["countdowns"][exam_name] = exam_date
-            save_data_sync(data)
+            await self.bot.save_data(data)
 
             embed = discord.Embed(
                 title=f"⏳ Countdown Set: {exam_name}",
@@ -397,7 +362,7 @@ class BonusFeaturesCog(commands.Cog):
             return
         setattr(self, flag, True)
 
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         v_data = users.get(VALENCE_ID, {})
@@ -473,7 +438,7 @@ class BonusFeaturesCog(commands.Cog):
     async def break_reminder_check(self):
         """If someone has been in a study voice channel for 2+ hours continuously,
         sends them a gentle break reminder DM (once per session)."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
         now_ts = int(time.time())
 
@@ -524,7 +489,7 @@ class BonusFeaturesCog(commands.Cog):
     @tasks.loop(minutes=15)
     async def touch_grass_check(self):
         """If someone studied 8+ hours today, sends a 'touch grass' message."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
         today_str = datetime.date.today().isoformat()
 
@@ -570,7 +535,7 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.command(name="whowon", description="See who's winning the weekly duel right now!")
     async def whowon_command(self, interaction: discord.Interaction):
         """Shows the live weekly duel standings."""
-        data = load_data_sync()
+        data = await self.bot.load_data()
         users = data.get("users", {})
 
         v_data = users.get(VALENCE_ID, {})
@@ -632,7 +597,7 @@ class BonusFeaturesCog(commands.Cog):
     async def flex_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Dramatic flex of your best stats."""
         target = user or interaction.user
-        data = load_data_sync()
+        data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
@@ -729,7 +694,7 @@ class BonusFeaturesCog(commands.Cog):
     async def predict_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Predicts end-of-week hours based on current pace."""
         target = user or interaction.user
-        data = load_data_sync()
+        data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
