@@ -1,7 +1,7 @@
 # --- DISCIPLINE EXTENSION ---
 # Features:
 #   1. Midnight punishment: toxic DMs for 0-hour days, comparing to partner's stats
-#   2. Hourly nagging from 4 PM to 10 PM IST if not currently studying
+#   2. Hourly nagging from 2 PM to 10 PM IST if not currently studying
 #   3. Auto-kick after 4 consecutive missed days with harsh DM + permanent invite
 #   4. Daily mention in study text channel for absent users
 #   5. Strike system: 3 = public warning, 4 = kicked
@@ -72,11 +72,13 @@ TOXIC_MESSAGES = [
 ]
 
 # ============================================================
-# HOURLY NAGGING MESSAGES (4 PM to 10 PM IST, escalating)
-# Index 0 = 4 PM (mild), Index 6 = 10 PM (maximum aggression)
+# HOURLY NAGGING MESSAGES (2 PM to 10 PM IST, escalating)
+# Starts gentle at 2 PM, gets increasingly aggressive toward 10 PM
 # ============================================================
 HOURLY_NAG_MESSAGES = {
-    16: "📚 Hey, it's 4 PM. Have you started studying yet? The day's slipping away.",
+    14: "📖 It's 2 PM. Afternoon's here — perfect time to start a study session. Don't waste it.",
+    15: "⏳ 3 PM already. Have you started studying yet? **{other_name}** has **{other_today:.1f}h** logged today. Clock's ticking.",
+    16: "📚 4 PM. The day is slipping away. **{other_name}** is at **{other_today:.1f}h**. You: **{my_today:.1f}h**. Get moving.",
     17: "⏰ 5 PM. Still not in a study channel? **{other_name}** has already put in **{other_today:.1f}h** today. What's your excuse?",
     18: "🔥 6 PM already. Half the evening is GONE. Get in a voice channel and start grinding. NOW.",
     19: "😤 It's 7 PM and you're STILL not studying?! **{other_name}** is at **{other_today:.1f}h** today. You have **{my_today:.1f}h**. Embarrassing.",
@@ -279,11 +281,11 @@ class DisciplineCog(commands.Cog):
                     )
 
     # ==================================================================
-    # TASK 2: HOURLY NAGGING (4 PM - 10 PM IST)
+    # TASK 2: HOURLY NAGGING (2 PM - 10 PM IST)
     # ==================================================================
     @tasks.loop(minutes=5)
     async def hourly_nag_check(self):
-        """Checks every 5 minutes. At the top of each hour from 4-10 PM IST,
+        """Checks every 5 minutes. At the top of each hour from 2-10 PM IST,
         sends a DM to anyone not currently in a study voice channel."""
         now_utc = datetime.datetime.now(datetime.UTC)
         ist_offset = datetime.timedelta(hours=5, minutes=30)
@@ -346,7 +348,7 @@ class DisciplineCog(commands.Cog):
                 )
 
                 # Color gets more red as the evening progresses
-                colors = {16: 0xFEE75C, 17: 0xFFA500, 18: 0xFF8C00, 19: 0xFF4500, 20: 0xFF0000, 21: 0xCC0000, 22: 0x8B0000}
+                colors = {14: 0x57F287, 15: 0xA3BE8C, 16: 0xFEE75C, 17: 0xFFA500, 18: 0xFF8C00, 19: 0xFF4500, 20: 0xFF0000, 21: 0xCC0000, 22: 0x8B0000}
 
                 embed = discord.Embed(
                     title=f"{'⏰' if hour < 19 else '🚨'} {hour}:00 — Are You Studying?",
