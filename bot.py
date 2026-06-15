@@ -1747,8 +1747,7 @@ async def send_weekly_graphs():
     try:
         import matplotlib
         matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
+        from matplotlib.figure import Figure
         from io import BytesIO
     except ImportError:
         logging.error("matplotlib not installed. Cannot generate weekly graphs.")
@@ -1779,8 +1778,9 @@ async def send_weekly_graphs():
                 continue  # Skip users with no activity this week
 
             # Generate the graph
-            fig, ax = plt.subplots(figsize=(8, 4))
+            fig = Figure(figsize=(8, 4))
             fig.patch.set_facecolor('#2B2D31')
+            ax = fig.subplots()
             ax.set_facecolor('#1E1F22')
 
             # Bar colors: gradient from dim to bright based on hours
@@ -1832,13 +1832,12 @@ async def send_weekly_graphs():
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='#1E1F22', edgecolor='#4F545C', alpha=0.8),
             )
 
-            plt.tight_layout()
+            fig.tight_layout()
 
             # Save to buffer
             buf = BytesIO()
             fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
             buf.seek(0)
-            plt.close(fig)
 
             # Send DM
             embed = discord.Embed(
@@ -2453,7 +2452,7 @@ async def weekly_graph_command(interaction: discord.Interaction):
 
         import matplotlib
         matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
         from io import BytesIO
 
         data = await load_data()
@@ -2477,8 +2476,9 @@ async def weekly_graph_command(interaction: discord.Interaction):
         total_week = sum(hours)
 
         # Generate graph
-        fig, ax = plt.subplots(figsize=(8, 4))
+        fig = Figure(figsize=(8, 4))
         fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
         ax.set_facecolor('#1E1F22')
 
         colors = []
@@ -2526,12 +2526,11 @@ async def weekly_graph_command(interaction: discord.Interaction):
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#1E1F22', edgecolor='#4F545C', alpha=0.8),
         )
 
-        plt.tight_layout()
+        fig.tight_layout()
 
         buf = BytesIO()
         fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
-        plt.close(fig)
 
         embed = discord.Embed(
             title="\U0001f4ca Your Weekly Study Report",
