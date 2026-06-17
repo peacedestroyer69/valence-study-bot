@@ -291,18 +291,18 @@ async def load_data() -> dict:
             logging.error(f"Firestore read error: {e}. Falling back to local.")
             
     try:
-        async with data_lock:
-            if not os.path.exists(DATA_FILE):
-                data = _default_data()
+        if not os.path.exists(DATA_FILE):
+            data = _default_data()
+            async with data_lock:
                 os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
                 with open(DATA_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
-                logging.info("Initialized new study_data.json")
-                return data
-
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            logging.info("Initialized new study_data.json")
             return data
+
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
     except (json.JSONDecodeError, IOError) as e:
         logging.error(f"Failed to load data file: {e}. Reinitializing.")
         data = _default_data()
@@ -356,7 +356,7 @@ bot.save_data = save_data
 bot.data_lock = data_lock
 
 async def setup_hook():
-    for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming"]:
+    for cog_name in ["cogs.discipline", "cogs.bonus_features"]:
         try:
             await bot.load_extension(cog_name)
             logging.info(f"Loaded {cog_name}")
@@ -1959,19 +1959,13 @@ async def on_ready():
 
     # Sync slash commands
     try:
-        target_guild_id = 1514186381348306964
-        guild = bot.get_guild(target_guild_id)
-        if guild is not None:
-            try:
-                bot.tree.copy_global_to(guild=guild)
-                synced = await bot.tree.sync(guild=guild)
-                logging.info(f"Successfully copied and synced {len(synced)} command(s) to target guild: {guild.name} (ID: {guild.id})")
-            except Exception as guild_e:
-                logging.error(f"Failed to copy and sync commands to target guild {target_guild_id}: {guild_e}", exc_info=True)
-        else:
-            logging.warning(f"Target guild with ID {target_guild_id} not found in bot's cache.")
+        target_guild = discord.Object(id=1514186381348306964)
+        bot.tree.copy_global_to(guild=target_guild)
+        synced = await bot.tree.sync(guild=target_guild)
+        logging.info(f"Successfully copied and synced {len(synced)} command(s) to target guild (ID: 1514186381348306964)")
     except Exception as e:
         logging.error(f"Error during slash command synchronization: {e}", exc_info=True)
+
 
     logging.info("Bot ready. All systems operational.")
 
