@@ -356,7 +356,7 @@ bot.save_data = save_data
 bot.data_lock = data_lock
 
 async def setup_hook():
-    for cog_name in ["cogs.discipline", "cogs.bonus_features"]:
+    for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming"]:
         try:
             await bot.load_extension(cog_name)
             logging.info(f"Loaded {cog_name}")
@@ -1900,8 +1900,14 @@ async def handle_health(request):
     return aiohttp.web.Response(text='{"status":"ok"}', content_type="application/json")
 
 
+_keepalive_started = False
+
 async def start_keepalive_server():
     """Starts the aiohttp web server for uptime monitoring."""
+    global _keepalive_started
+    if _keepalive_started:
+        return
+    _keepalive_started = True
     app = aiohttp.web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/health", handle_health)
@@ -2639,12 +2645,17 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
 # SECTION 13: ENTRY POINT
 # ============================================================
 
+async def main():
+    await start_keepalive_server()
+    async with bot:
+        await bot.start(os.getenv("BOT_TOKEN"))
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    bot.run(os.getenv("BOT_TOKEN"))
+    asyncio.run(main())
 
 
