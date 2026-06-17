@@ -291,18 +291,18 @@ async def load_data() -> dict:
             logging.error(f"Firestore read error: {e}. Falling back to local.")
             
     try:
-        if not os.path.exists(DATA_FILE):
-            data = _default_data()
-            async with data_lock:
+        async with data_lock:
+            if not os.path.exists(DATA_FILE):
+                data = _default_data()
                 os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
                 with open(DATA_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
-            logging.info("Initialized new study_data.json")
-            return data
+                logging.info("Initialized new study_data.json")
+                return data
 
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data
     except (json.JSONDecodeError, IOError) as e:
         logging.error(f"Failed to load data file: {e}. Reinitializing.")
         data = _default_data()
