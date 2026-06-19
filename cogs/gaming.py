@@ -71,17 +71,18 @@ class GamingCog(commands.Cog):
         platform: app_commands.Choice[str],
         username: str,
     ):
-        data = await self.bot.load_data()
-        uid = str(interaction.user.id)
+        async with self.bot.db_write_lock:
+            data = await self.bot.load_data()
+            uid = str(interaction.user.id)
 
-        if uid not in data["users"]:
-            data["users"][uid] = {"username": interaction.user.display_name}
+            if uid not in data["users"]:
+                data["users"][uid] = {"username": interaction.user.display_name}
 
-        if "chess_accounts" not in data["users"][uid]:
-            data["users"][uid]["chess_accounts"] = {}
+            if "chess_accounts" not in data["users"][uid]:
+                data["users"][uid]["chess_accounts"] = {}
 
-        data["users"][uid]["chess_accounts"][platform.value] = username
-        await self.bot.save_data(data)
+            data["users"][uid]["chess_accounts"][platform.value] = username
+            await self.bot.save_data(data)
 
         await interaction.response.send_message(
             f"✅ Successfully linked **{platform.name}** account: `{username}`",
@@ -137,17 +138,18 @@ class GamingCog(commands.Cog):
         winner: discord.Member,
         loser: discord.Member,
     ):
-        data = await self.bot.load_data()
+        async with self.bot.db_write_lock:
+            data = await self.bot.load_data()
 
-        for uid in [str(winner.id), str(loser.id)]:
-            if uid not in data["users"]:
-                data["users"][uid] = {}
-            data["users"][uid].setdefault("gaming_wins", 0)
-            data["users"][uid].setdefault("gaming_losses", 0)
+            for uid in [str(winner.id), str(loser.id)]:
+                if uid not in data["users"]:
+                    data["users"][uid] = {}
+                data["users"][uid].setdefault("gaming_wins", 0)
+                data["users"][uid].setdefault("gaming_losses", 0)
 
-        data["users"][str(winner.id)]["gaming_wins"] += 1
-        data["users"][str(loser.id)]["gaming_losses"] += 1
-        await self.bot.save_data(data)
+            data["users"][str(winner.id)]["gaming_wins"] += 1
+            data["users"][str(loser.id)]["gaming_losses"] += 1
+            await self.bot.save_data(data)
 
         w_wins = data["users"][str(winner.id)]["gaming_wins"]
         l_wins = data["users"][str(loser.id)]["gaming_wins"]
@@ -320,9 +322,12 @@ class GamingCog(commands.Cog):
                         await channel.send(embed=embed)
 
                     # Mark game as processed (keep last 50)
-                    processed_games.append(game_id)
-                    data["processed_chess_games"] = processed_games[-50:]
-                    await self.bot.save_data(data)
+                    async with self.bot.db_write_lock:
+                        data = await self.bot.load_data()
+                        p_games = data.get("processed_chess_games", [])
+                        p_games.append(game_id)
+                        data["processed_chess_games"] = p_games[-50:]
+                        await self.bot.save_data(data)
 
                     logging.info(
                         f"[GAMING] Auto-resolved Lichess game {game_id}: "

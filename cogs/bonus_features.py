@@ -292,10 +292,12 @@ class BonusFeaturesCog(commands.Cog):
                 return
 
             # Save to meta
-            if "countdowns" not in data:
-                data["countdowns"] = {}
-            data["countdowns"][exam_name] = exam_date
-            await self.bot.save_data(data)
+            async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                if "countdowns" not in data:
+                    data["countdowns"] = {}
+                data["countdowns"][exam_name] = exam_date
+                await self.bot.save_data(data)
 
             embed = discord.Embed(
                 title=f"⏳ Countdown Set: {exam_name}",
@@ -458,6 +460,11 @@ class BonusFeaturesCog(commands.Cog):
 
                 for guild in self.bot.guilds:
                     member = guild.get_member(int(uid_str))
+                    if not member:
+                        try:
+                            member = await guild.fetch_member(int(uid_str))
+                        except Exception:
+                            member = None
                     if member:
                         try:
                             embed = discord.Embed(
@@ -509,6 +516,11 @@ class BonusFeaturesCog(commands.Cog):
 
             for guild in self.bot.guilds:
                 member = guild.get_member(int(uid_str))
+                if not member:
+                    try:
+                        member = await guild.fetch_member(int(uid_str))
+                    except Exception:
+                        member = None
                 if member:
                     try:
                         msg = random.choice(TOUCH_GRASS_MESSAGES).format(hours=today_hours)

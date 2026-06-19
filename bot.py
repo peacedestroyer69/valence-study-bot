@@ -354,6 +354,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 bot.load_data = load_data
 bot.save_data = save_data
 bot.data_lock = data_lock
+bot.db_write_lock = asyncio.Lock()
 
 async def setup_hook():
     for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming"]:
@@ -602,8 +603,9 @@ async def update_leaderboard_embed(mode: str = "alltime"):
     global current_view_mode
     current_view_mode = mode
     try:
-        data = await load_data()
-        channel = bot.get_channel(LEADERBOARD_CHANNEL_ID)
+        async with bot.db_write_lock:
+            data = await load_data()
+            channel = bot.get_channel(LEADERBOARD_CHANNEL_ID)
         if channel is None:
             logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
             return
@@ -784,13 +786,14 @@ class SubjectTagView(discord.ui.View):
             return
         try:
             tag = select.values[0]
-            data = await load_data()
-            udata = data["users"].get(self.user_id, {})
-            # Track subject hours
-            if "subject_hours" not in udata:
-                udata["subject_hours"] = {}
-            udata["subject_hours"][tag] = udata["subject_hours"].get(tag, 0) + self.session_seconds
-            await save_data(data)
+            async with bot.db_write_lock:
+                data = await load_data()
+                udata = data["users"].get(self.user_id, {})
+                # Track subject hours
+                if "subject_hours" not in udata:
+                    udata["subject_hours"] = {}
+                udata["subject_hours"][tag] = udata["subject_hours"].get(tag, 0) + self.session_seconds
+                await save_data(data)
 
             tag_emoji = {"physics": "\U0001f9ea", "chemistry": "\u2697\ufe0f", "maths": "\U0001f4d0", "biology": "\U0001f9ec", "cs": "\U0001f4bb", "general": "\U0001f30d"}
             await interaction.response.send_message(
@@ -1067,85 +1070,84 @@ async def check_weekly_reset(data: dict):
     while True:
         try:
             await asyncio.sleep(3600)  # Check every hour
-            data = await load_data()
-            today = datetime.date.today()
-            today_str = today.isoformat()
+            do_weekly_reset = False
+            winner_uid = None
+            winner_seconds = 0
+            winner_name = "Unknown"
+            
+            async with bot.db_write_lock:
+                data = await load_data()
+                today = datetime.date.today()
+                today_str = today.isoformat()
 
-            # NOTE: Enforcer logic (DMs, warnings, kicks) is handled by
-            # cogs/discipline.py to avoid duplication. Removed from bot.py.
-
-            # --- Daily reset for total_seconds_today and messages_today ---
-            for uid, udata in data["users"].items():
-                last_study = udata.get("last_study_date")
-                if last_study and last_study != today_str:
-                    udata["total_seconds_today"] = 0
-                    udata["messages_today"] = 0
-
-            # --- Weekly reset ---
-            if today.weekday() == WEEKLY_RESET_DAY:
-                last_reset = data["meta"].get("last_weekly_reset")
-                if last_reset != today_str:
-                    # Find this week's winner BEFORE resetting
-                    winner_uid = None
-                    winner_seconds = 0
-                    winner_name = "Unknown"
-                    for uid, udata in data["users"].items():
-                        weekly = udata.get("total_seconds_weekly", 0)
-                        if weekly > winner_seconds:
-                            winner_seconds = weekly
-                            winner_uid = uid
-                            winner_name = udata.get("username", "Unknown")
-
-                    # Reset weekly and daily totals
-                    for uid, udata in data["users"].items():
-                        udata["total_seconds_weekly"] = 0
+                # --- Daily reset for total_seconds_today and messages_today ---
+                for uid, udata in data["users"].items():
+                    last_study = udata.get("last_study_date")
+                    if last_study and last_study != today_str:
                         udata["total_seconds_today"] = 0
-                        udata["total_seconds_doubt_weekly"] = 0
-                        udata["messages_weekly"] = 0
                         udata["messages_today"] = 0
 
-                    data["meta"]["last_weekly_reset"] = today_str
-                    await save_data(data)
+                # --- Weekly reset ---
+                if today.weekday() == WEEKLY_RESET_DAY:
+                    last_reset = data["meta"].get("last_weekly_reset")
+                    if last_reset != today_str:
+                        do_weekly_reset = True
+                        # Find this week's winner BEFORE resetting
+                        for uid, udata in data["users"].items():
+                            weekly = udata.get("total_seconds_weekly", 0)
+                            if weekly > winner_seconds:
+                                winner_seconds = weekly
+                                winner_uid = uid
+                                winner_name = udata.get("username", "Unknown")
 
-                    # --- Strip ALL milestone roles from everyone (weekly reset) ---
-                    all_role_ids = set(MILESTONE_ROLES.values()) | set(DOUBT_MILESTONE_ROLES.values()) | set(TEXT_MILESTONE_ROLES.values())
-                    for guild in bot.guilds:
-                        for member in guild.members:
-                            if member.bot:
-                                continue
-                            roles_to_strip = [r for r in member.roles if r.id in all_role_ids]
-                            if roles_to_strip:
-                                try:
-                                    await member.remove_roles(*roles_to_strip, reason="Weekly reset — all milestone roles cleared")
-                                    logging.info(f"[WEEKLY RESET] Stripped {len(roles_to_strip)} roles from {member.display_name}")
-                                except Exception as e:
-                                    logging.error(f"Failed to strip roles from {member.display_name}: {e}")
+                        # Reset weekly and daily totals
+                        for uid, udata in data["users"].items():
+                            udata["total_seconds_weekly"] = 0
+                            udata["total_seconds_today"] = 0
+                            udata["total_seconds_doubt_weekly"] = 0
+                            udata["messages_weekly"] = 0
+                            udata["messages_today"] = 0
 
-                    # Send weekly winner announcement
-                    if winner_uid is not None and winner_seconds > 0:
-                        try:
-                            channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
-                            if channel:
-                                embed = discord.Embed(
-                                    title="🏆 Weekly Winner!",
-                                    description=(
-                                        f"Congratulations to **{winner_name}** (<@{winner_uid}>) "
-                                        f"for topping this week's leaderboard with "
-                                        f"**{format_time(winner_seconds)}** of study! 🔥🎉"
-                                    ),
-                                    color=0xFFD700,
-                                    timestamp=datetime.datetime.now(datetime.UTC),
-                                )
-                                embed.set_footer(text="A new week begins. The grind resets. Go again. 💪")
-                                await channel.send(embed=embed)
-                        except Exception as e:
-                            logging.error(f"Failed to send weekly winner announcement: {e}")
-
-                    logging.info("Weekly reset completed.")
-                else:
-                    await save_data(data)
-            else:
+                        data["meta"]["last_weekly_reset"] = today_str
+                
                 await save_data(data)
+
+            if do_weekly_reset:
+                # --- Strip ALL milestone roles from everyone (weekly reset) ---
+                all_role_ids = set(MILESTONE_ROLES.values()) | set(DOUBT_MILESTONE_ROLES.values()) | set(TEXT_MILESTONE_ROLES.values())
+                for guild in bot.guilds:
+                    for member in guild.members:
+                        if member.bot:
+                            continue
+                        roles_to_strip = [r for r in member.roles if r.id in all_role_ids]
+                        if roles_to_strip:
+                            try:
+                                await member.remove_roles(*roles_to_strip, reason="Weekly reset — all milestone roles cleared")
+                                logging.info(f"[WEEKLY RESET] Stripped {len(roles_to_strip)} roles from {member.display_name}")
+                            except Exception as e:
+                                logging.error(f"Failed to strip roles from {member.display_name}: {e}")
+
+                # Send weekly winner announcement
+                if winner_uid is not None and winner_seconds > 0:
+                    try:
+                        channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
+                        if channel:
+                            embed = discord.Embed(
+                                title="🏆 Weekly Winner!",
+                                description=(
+                                    f"Congratulations to **{winner_name}** (<@{winner_uid}>) "
+                                    f"for topping this week's leaderboard with "
+                                    f"**{format_time(winner_seconds)}** of study! 🔥🎉"
+                                ),
+                                color=0xFFD700,
+                                timestamp=datetime.datetime.now(datetime.UTC),
+                            )
+                            embed.set_footer(text="A new week begins. The grind resets. Go again. 💪")
+                            await channel.send(embed=embed)
+                    except Exception as e:
+                        logging.error(f"Failed to send weekly winner announcement: {e}")
+
+                logging.info("Weekly reset completed.")
 
         except Exception as e:
             logging.error(f"Weekly reset check error: {e}")
@@ -1337,10 +1339,11 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
             except Exception:
                 pass
 
-        data = await load_data()
-        udata = ensure_user(data, member)
-        udata["session_start_timestamp"] = int(time.time())
-        await save_data(data)
+        async with bot.db_write_lock:
+            data = await load_data()
+            udata = ensure_user(data, member)
+            udata["session_start_timestamp"] = int(time.time())
+            await save_data(data)
         logging.info(f"[SESSION START] {member.display_name} joined #{channel.name}")
         # Don't override pomodoro channel status — it has its own status loop
         if channel.id != POMODORO_CHANNEL_ID:
@@ -1353,128 +1356,130 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
 async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
     """Processes a voice channel leave event."""
     try:
-        data = await load_data()
-        uid = str(member.id)
-        udata = ensure_user(data, member)
+        async with bot.db_write_lock:
 
-        start_ts = udata.get("session_start_timestamp")
-        if start_ts is None:
-            logging.warning(f"[SESSION END] {member.display_name} left but had no active session.")
-            await update_voice_channel_status(channel, None)
-            return
+                data = await load_data()
+                uid = str(member.id)
+                udata = ensure_user(data, member)
 
-        session_seconds = int(time.time()) - start_ts
+                start_ts = udata.get("session_start_timestamp")
+                if start_ts is None:
+                    logging.warning(f"[SESSION END] {member.display_name} left but had no active session.")
+                    await update_voice_channel_status(channel, None)
+                    return
 
-        if session_seconds < MIN_SESSION_SECONDS:
-            logging.info(
-                f"[SESSION DISCARD] {member.display_name} -- {session_seconds}s "
-                f"(below {MIN_SESSION_SECONDS}s minimum)"
-            )
-            udata["session_start_timestamp"] = None
-            await save_data(data)
-            await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
-            return
+                session_seconds = int(time.time()) - start_ts
 
-        ch_type = get_channel_type(channel.id)
-        real_start_ts = start_ts  # Save BEFORE clearing
-        udata["session_start_timestamp"] = None
+                if session_seconds < MIN_SESSION_SECONDS:
+                    logging.info(
+                        f"[SESSION DISCARD] {member.display_name} -- {session_seconds}s "
+                        f"(below {MIN_SESSION_SECONDS}s minimum)"
+                    )
+                    udata["session_start_timestamp"] = None
+                    await save_data(data)
+                    await update_voice_channel_status(channel, None)
+                    await update_bot_presence(data)
+                    return
 
-        if channel.id == POMODORO_CHANNEL_ID:
-            # --- GROUP POMODORO: calculate study time excluding breaks ---
-            study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
+                ch_type = get_channel_type(channel.id)
+                real_start_ts = start_ts  # Save BEFORE clearing
+                udata["session_start_timestamp"] = None
 
-            if study_secs >= MIN_SESSION_SECONDS:
-                udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
-                udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
-                udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
-                udata["session_count"] = udata.get("session_count", 0) + 1
+                if channel.id == POMODORO_CHANNEL_ID:
+                    # --- GROUP POMODORO: calculate study time excluding breaks ---
+                    study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
 
-                if study_secs > udata.get("longest_session_seconds", 0):
-                    udata["longest_session_seconds"] = study_secs
-                if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                    udata["best_day_seconds"] = udata["total_seconds_today"]
+                    if study_secs >= MIN_SESSION_SECONDS:
+                        udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
+                        udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
+                        udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
+                        udata["session_count"] = udata.get("session_count", 0) + 1
 
-                # Record daily history for heatmap
-                today_str = datetime.date.today().isoformat()
-                if "daily_history" not in udata:
-                    udata["daily_history"] = {}
-                udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+                        if study_secs > udata.get("longest_session_seconds", 0):
+                            udata["longest_session_seconds"] = study_secs
+                        if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                            udata["best_day_seconds"] = udata["total_seconds_today"]
 
-                update_streak(udata)
-                await save_data(data)
+                        # Record daily history for heatmap
+                        today_str = datetime.date.today().isoformat()
+                        if "daily_history" not in udata:
+                            udata["daily_history"] = {}
+                        udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
 
-                total_time_in_channel = int(time.time()) - real_start_ts
-                break_secs = total_time_in_channel - study_secs
+                        update_streak(udata)
+                        await save_data(data)
 
-                logging.info(f"[POMODORO END] {member.display_name} -- {format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}")
+                        total_time_in_channel = int(time.time()) - real_start_ts
+                        break_secs = total_time_in_channel - study_secs
 
-                await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
-                await check_and_award_milestones(member, data)
-                await update_leaderboard_embed(current_view_mode)
-            else:
-                logging.info(f"[POMODORO DISCARD] {member.display_name} -- {study_secs}s study (below minimum)")
-                await save_data(data)
+                        logging.info(f"[POMODORO END] {member.display_name} -- {format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}")
 
-            await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
-        elif ch_type == "study":
-            # --- STUDY SESSION: full tracking ---
-            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
-            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
-            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
-            udata["session_count"] = udata.get("session_count", 0) + 1
+                        await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
+                        await check_and_award_milestones(member, data)
+                        await update_leaderboard_embed(current_view_mode)
+                    else:
+                        logging.info(f"[POMODORO DISCARD] {member.display_name} -- {study_secs}s study (below minimum)")
+                        await save_data(data)
 
-            if session_seconds > udata.get("longest_session_seconds", 0):
-                udata["longest_session_seconds"] = session_seconds
-            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                udata["best_day_seconds"] = udata["total_seconds_today"]
+                    await update_voice_channel_status(channel, None)
+                    await update_bot_presence(data)
+                elif ch_type == "study":
+                    # --- STUDY SESSION: full tracking ---
+                    udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
+                    udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
+                    udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
+                    udata["session_count"] = udata.get("session_count", 0) + 1
 
-            # Record daily history for heatmap
-            today_str = datetime.date.today().isoformat()
-            if "daily_history" not in udata:
-                udata["daily_history"] = {}
-            udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+                    if session_seconds > udata.get("longest_session_seconds", 0):
+                        udata["longest_session_seconds"] = session_seconds
+                    if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                        udata["best_day_seconds"] = udata["total_seconds_today"]
 
-            update_streak(udata)
-            await save_data(data)
+                    # Record daily history for heatmap
+                    today_str = datetime.date.today().isoformat()
+                    if "daily_history" not in udata:
+                        udata["daily_history"] = {}
+                    udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
 
-            logging.info(f"[STUDY END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                    update_streak(udata)
+                    await save_data(data)
 
-            await send_session_log(member, session_seconds, data)
-            await check_and_award_milestones(member, data)
-            await update_leaderboard_embed(current_view_mode)
+                    logging.info(f"[STUDY END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
 
-            await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
+                    await send_session_log(member, session_seconds, data)
+                    await check_and_award_milestones(member, data)
+                    await update_leaderboard_embed(current_view_mode)
 
-        elif ch_type == "doubt":
-            # --- DOUBT SESSION: tracked separately, no milestones ---
-            udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
-            udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
-            udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
-            await save_data(data)
+                    await update_voice_channel_status(channel, None)
+                    await update_bot_presence(data)
 
-            logging.info(f"[DOUBT END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                elif ch_type == "doubt":
+                    # --- DOUBT SESSION: tracked separately, no milestones ---
+                    udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
+                    udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
+                    udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
+                    await save_data(data)
 
-            await send_doubt_log(member, session_seconds, data, channel)
-            await check_and_award_doubt_milestones(member, data)
+                    logging.info(f"[DOUBT END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
 
-            await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
+                    await send_doubt_log(member, session_seconds, data, channel)
+                    await check_and_award_doubt_milestones(member, data)
 
-        elif ch_type == "discussion":
-            # --- DISCUSSION SESSION: log only, no achievements ---
-            udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
-            udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
-            await save_data(data)
+                    await update_voice_channel_status(channel, None)
+                    await update_bot_presence(data)
 
-            logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                elif ch_type == "discussion":
+                    # --- DISCUSSION SESSION: log only, no achievements ---
+                    udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
+                    udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
+                    await save_data(data)
 
-            await send_discussion_log(member, session_seconds, data, channel)
+                    logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
 
-            await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
+                    await send_discussion_log(member, session_seconds, data, channel)
+
+                    await update_voice_channel_status(channel, None)
+                    await update_bot_presence(data)
     except Exception as e:
         logging.error(f"Error handling voice leave for {member.display_name}: {e}")
 
@@ -1492,12 +1497,13 @@ async def on_message(message: discord.Message):
     # Track messages in study text channels
     if message.channel.id in STUDY_TEXT_CHANNELS:
         try:
-            data = await load_data()
-            udata = ensure_user(data, message.author)
-            udata["total_messages"] = udata.get("total_messages", 0) + 1
-            udata["messages_today"] = udata.get("messages_today", 0) + 1
-            udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
-            await save_data(data)
+            async with bot.db_write_lock:
+                data = await load_data()
+                udata = ensure_user(data, message.author)
+                udata["total_messages"] = udata.get("total_messages", 0) + 1
+                udata["messages_today"] = udata.get("messages_today", 0) + 1
+                udata["messages_weekly"] = udata.get("messages_weekly", 0) + 1
+                await save_data(data)
 
             # Award text milestone roles (only highest, remove lower)
             total_msgs = udata.get("messages_weekly", 0)

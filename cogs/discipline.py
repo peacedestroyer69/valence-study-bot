@@ -203,9 +203,15 @@ class DisciplineCog(commands.Cog):
                 # ---- SLACKER DETECTED ----
                 strikes += 1
                 my_data["discipline_strikes"] = strikes
-                await self.bot.save_data(data)
+                async with self.bot.db_write_lock:
+                    await self.bot.save_data(data)
 
                 member = guild.get_member(int(uid_str))
+                if not member:
+                    try:
+                        member = await guild.fetch_member(int(uid_str))
+                    except Exception:
+                        member = None
                 other_name = other_user_data.get("username", "your partner")
                 other_hours = other_seconds / 3600
 
@@ -276,7 +282,8 @@ class DisciplineCog(commands.Cog):
                 # ---- STUDIED: Reset strikes ----
                 if strikes > 0:
                     my_data["discipline_strikes"] = 0
-                    await self.bot.save_data(data)
+                    async with self.bot.db_write_lock:
+                        await self.bot.save_data(data)
                     logging.info(
                         f"[DISCIPLINE] Reset strikes for {my_data.get('username', uid_str)} "
                         f"(studied {my_seconds/3600:.1f}h yesterday)"
@@ -347,6 +354,11 @@ class DisciplineCog(commands.Cog):
             other_name = other_data.get("username", "your partner")
 
             member = guild.get_member(int(uid_str))
+            if not member:
+                try:
+                    member = await guild.fetch_member(int(uid_str))
+                except Exception:
+                    member = None
             if not member:
                 continue
 
