@@ -24,7 +24,7 @@ from firebase_admin import firestore
 # ---- Channel & User IDs ----
 VALENCE_ID = "856485470171299891"
 UJJWAL_ID = "1403716456025165864"
-GENERAL_CHANNEL_ID = 1514187630374289418
+GENERAL_CHANNEL_ID = 1514241642415001610  # #study-discussion text channel (was General meet voice channel)
 STUDY_TEXT_CHANNEL_ID = 1514241642415001610  # #study-discussion for public callouts
 
 # Study voice channels (used to check if someone is currently studying)
