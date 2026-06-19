@@ -357,6 +357,8 @@ bot.data_lock = data_lock
 
 async def setup_hook():
     for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming"]:
+        if cog_name in bot.extensions:
+            continue
         try:
             await bot.load_extension(cog_name)
             logging.info(f"Loaded {cog_name}")
@@ -1923,6 +1925,8 @@ async def start_keepalive_server():
 # SECTION 11: ON_READY EVENT
 # ============================================================
 
+_bg_tasks_started = False
+
 @bot.event
 async def on_ready():
     """Fires when the bot has connected and is ready."""
@@ -1951,11 +1955,14 @@ async def on_ready():
     await save_data(data)
 
     # Start background tasks
-    asyncio.create_task(presence_rotation_loop())
-    asyncio.create_task(check_weekly_reset(data))
-    asyncio.create_task(pomodoro_status_loop())
-    asyncio.create_task(weekly_graph_dm_loop())
-    asyncio.create_task(start_keepalive_server())
+    global _bg_tasks_started
+    if not _bg_tasks_started:
+        _bg_tasks_started = True
+        asyncio.create_task(presence_rotation_loop())
+        asyncio.create_task(check_weekly_reset(data))
+        asyncio.create_task(pomodoro_status_loop())
+        asyncio.create_task(weekly_graph_dm_loop())
+        asyncio.create_task(start_keepalive_server())
 
     # Restore persistent view for leaderboard buttons
     bot.add_view(LeaderboardView("alltime"))
@@ -2647,8 +2654,43 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
 
 async def main():
     await start_keepalive_server()
+    
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        logging.critical("BOT_TOKEN is not set in environment variables. Exiting.")
+        return
+
+    retry_delay = 5  # Initial backoff delay in seconds
+    max_delay = 300  # Maximum backoff delay (5 minutes)
+
     async with bot:
-        await bot.start(os.getenv("BOT_TOKEN"))
+        while True:
+            try:
+                logging.info("Attempting to connect bot to Discord gateway...")
+                await bot.start(token)
+                break
+            except (discord.HTTPException, aiohttp.ClientResponseError) as e:
+                status = getattr(e, "status", None)
+                if status == 429 or "429" in str(e) or "1015" in str(e):
+                    logging.warning(
+                        f"Discord gateway rate limit hit (HTTP 429 / Error 1015). "
+                        f"Retrying in {retry_delay} seconds... Error: {e}"
+                    )
+                else:
+                    logging.warning(
+                        f"Discord connection failed with HTTP exception: {e}. "
+                        f"Retrying in {retry_delay} seconds..."
+                    )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+            except Exception as e:
+                logging.warning(
+                    f"Unexpected connection/network error in bot main: {e}. "
+                    f"Retrying in {retry_delay} seconds...",
+                    exc_info=True
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
 
 if __name__ == "__main__":
     logging.basicConfig(
