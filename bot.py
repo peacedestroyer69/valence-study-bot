@@ -1783,67 +1783,41 @@ async def individual_pomodoro_loop(user_id: int):
             cycles = pomo.get("cycle", 0)
             if total_study > 0:
                 try:
-                    async with bot.db_write_lock:
-                        data = await load_data()
-                        member = None
-                        for guild in bot.guilds:
-                            member = guild.get_member(user_id)
-                            if member:
-                                break
-                        if not member:
-                            try:
-                                member = await bot.fetch_user(user_id)
-                            except Exception:
-                                pass
-
+                    member = None
+                    for guild in bot.guilds:
+                        member = guild.get_member(user_id)
                         if member:
-                            udata = ensure_user(data, member)
-                            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + total_study
-                            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + total_study
-                            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + total_study
-                            udata["session_count"] = udata.get("session_count", 0) + 1
+                            break
+                    if not member:
+                        try:
+                            member = await bot.fetch_user(user_id)
+                        except Exception:
+                            pass
 
-                            if total_study > udata.get("longest_session_seconds", 0):
-                                udata["longest_session_seconds"] = total_study
-                            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                                udata["best_day_seconds"] = udata["total_seconds_today"]
-
-                            today_str = datetime.date.today().isoformat()
-                            if "daily_history" not in udata:
-                                udata["daily_history"] = {}
-                            udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
-
-                            update_streak(udata)
-                            await save_data(data)
-
-                            if isinstance(member, discord.Member):
-                                await check_and_award_milestones(member, data)
-                            
-                            await update_leaderboard_embed(current_view_mode)
-                            
-                            log_ch = bot.get_channel(LOG_CHANNEL_ID)
-                            if log_ch:
-                                accent = USER_COLORS.get(user_id, DEFAULT_COLOR)
-                                embed = discord.Embed(color=accent)
-                                embed.set_author(
-                                    name=f"{member.display_name} — Personal Pomodoro Complete",
-                                    icon_url=member.display_avatar.url if (hasattr(member, 'display_avatar') and member.display_avatar) else None,
-                                )
-                                if hasattr(member, 'display_avatar') and member.display_avatar:
-                                    embed.set_thumbnail(url=member.display_avatar.url)
-                                embed.add_field(name="🍅 Type", value="Personal Pomodoro", inline=True)
-                                embed.add_field(name="🔄 Cycles", value=str(cycles), inline=True)
-                                embed.add_field(name="📚 Study Time", value=format_time(total_study), inline=True)
-                                study_min = pomo.get("study_seconds", 0) // 60
-                                break_min = pomo.get("break_seconds", 0) // 60
-                                embed.add_field(name="⚙️ Settings", value=f"{study_min}m study / {break_min}m break", inline=True)
-                                embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
-                                embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
-                                embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
-                                embed.timestamp = datetime.datetime.now(datetime.UTC)
-                                await log_ch.send(embed=embed)
+                    if member:
+                        log_ch = bot.get_channel(LOG_CHANNEL_ID)
+                        if log_ch:
+                            accent = USER_COLORS.get(user_id, DEFAULT_COLOR)
+                            embed = discord.Embed(color=accent)
+                            embed.set_author(
+                                name=f"{member.display_name} — Personal Pomodoro Complete",
+                                icon_url=member.display_avatar.url if (hasattr(member, 'display_avatar') and member.display_avatar) else None,
+                            )
+                            if hasattr(member, 'display_avatar') and member.display_avatar:
+                                embed.set_thumbnail(url=member.display_avatar.url)
+                            embed.add_field(name="🍅 Type", value="Personal Pomodoro", inline=True)
+                            embed.add_field(name="🔄 Cycles", value=str(cycles), inline=True)
+                            embed.add_field(name="📚 Study Time", value=format_time(total_study), inline=True)
+                            study_min = pomo.get("study_seconds", 0) // 60
+                            break_min = pomo.get("break_seconds", 0) // 60
+                            embed.add_field(name="⚙️ Settings", value=f"{study_min}m study / {break_min}m break", inline=True)
+                            embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
+                            embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
+                            embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
+                            embed.timestamp = datetime.datetime.now(datetime.UTC)
+                            await log_ch.send(embed=embed)
                 except Exception as log_err:
-                    logging.error(f"Error saving/logging personal pomodoro session: {log_err}")
+                    logging.error(f"Error logging personal pomodoro session completion: {log_err}")
 
 
 # ============================================================
@@ -2533,6 +2507,15 @@ async def pomo_start(interaction: discord.Interaction, study_min: int = 25, brea
     """Starts an individual pomodoro for the user."""
     try:
         uid = interaction.user.id
+        
+        # Force the user to be in one of the study voice channels to start
+        member = interaction.user
+        if not (isinstance(member, discord.Member) and member.voice and member.voice.channel and member.voice.channel.id in STUDY_CHANNELS):
+            await interaction.response.send_message(
+                "❌ You must be in one of the study voice channels (Study Room or Group Study) to start a personal Pomodoro!",
+                ephemeral=True,
+            )
+            return
         if uid in active_pomodoros:
             await interaction.response.send_message(
                 "\u26a0\ufe0f You already have an active Pomodoro! Use `/pomodoro stop` first.",
