@@ -367,40 +367,33 @@ class BonusFeaturesCog(commands.Cog):
         data = await self.bot.load_data()
         users = data.get("users", {})
 
-        v_data = users.get(VALENCE_ID, {})
-        u_data = users.get(UJJWAL_ID, {})
+        # Sort users by weekly hours
+        weekly_hours_list = []
+        for u_id, u_data in users.items():
+            hours = u_data.get("total_seconds_weekly", 0) / 3600
+            name = u_data.get("username", "Unknown")
+            weekly_hours_list.append((u_id, name, hours))
+        
+        weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
 
-        v_hours = v_data.get("total_seconds_weekly", 0) / 3600
-        u_hours = u_data.get("total_seconds_weekly", 0) / 3600
-        v_name = v_data.get("username", "Valence")
-        u_name = u_data.get("username", "Ujjwal")
+        if len(weekly_hours_list) < 2:
+            return # Need at least two users for a duel!
 
-        if v_hours > u_hours:
-            winner_name, winner_hours = v_name, v_hours
-            loser_name, loser_hours = u_name, u_hours
-            winner_id = VALENCE_ID
-        elif u_hours > v_hours:
-            winner_name, winner_hours = u_name, u_hours
-            loser_name, loser_hours = v_name, v_hours
-            winner_id = UJJWAL_ID
-        else:
-            # Tie
-            winner_name, winner_hours = None, v_hours
-            loser_name, loser_hours = None, u_hours
-            winner_id = None
+        winner_id, winner_name, winner_hours = weekly_hours_list[0]
+        loser_id, loser_name, loser_hours = weekly_hours_list[1]
 
         channel = self.bot.get_channel(CELEBRATION_CHANNEL_ID)
         if not channel:
             return
 
-        if winner_id is None:
+        if winner_hours == loser_hours:
             # TIE
             embed = discord.Embed(
                 title="⚔️ WEEKLY DUEL — IT'S A TIE!",
                 description=(
-                    f"Both warriors studied **{v_hours:.1f} hours** this week!\n\n"
-                    f"🤝 **{v_name}**: {v_hours:.1f}h\n"
-                    f"🤝 **{u_name}**: {u_hours:.1f}h\n\n"
+                    f"Both warriors studied **{winner_hours:.1f} hours** this week!\n\n"
+                    f"🤝 **{winner_name}**: {winner_hours:.1f}h\n"
+                    f"🤝 **{loser_name}**: {loser_hours:.1f}h\n\n"
                     f"*Neither one backed down. Respect.*"
                 ),
                 color=0xFEE75C,
@@ -444,7 +437,7 @@ class BonusFeaturesCog(commands.Cog):
         users = data.get("users", {})
         now_ts = int(time.time())
 
-        for uid_str in [VALENCE_ID, UJJWAL_ID]:
+        for uid_str in list(users.keys()):
             udata = users.get(uid_str, {})
             start_ts = udata.get("session_start_timestamp")
             if start_ts is None:
@@ -500,7 +493,7 @@ class BonusFeaturesCog(commands.Cog):
         users = data.get("users", {})
         today_str = datetime.date.today().isoformat()
 
-        for uid_str in [VALENCE_ID, UJJWAL_ID]:
+        for uid_str in list(users.keys()):
             udata = users.get(uid_str, {})
             today_secs = udata.get("daily_history", {}).get(today_str, 0)
             today_hours = today_secs / 3600
@@ -550,34 +543,40 @@ class BonusFeaturesCog(commands.Cog):
         data = await self.bot.load_data()
         users = data.get("users", {})
 
-        v_data = users.get(VALENCE_ID, {})
-        u_data = users.get(UJJWAL_ID, {})
-        v_hours = v_data.get("total_seconds_weekly", 0) / 3600
-        u_hours = u_data.get("total_seconds_weekly", 0) / 3600
-        v_name = v_data.get("username", "Valence")
-        u_name = u_data.get("username", "Ujjwal")
+        # Sort users by weekly hours
+        weekly_hours_list = []
+        for u_id, u_data in users.items():
+            hours = u_data.get("total_seconds_weekly", 0) / 3600
+            name = u_data.get("username", "Unknown")
+            weekly_hours_list.append((u_id, name, hours))
+        
+        weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
 
-        total = v_hours + u_hours
+        if len(weekly_hours_list) < 2:
+            await interaction.response.send_message("📭 Need at least two players with study data to have a duel!", ephemeral=True)
+            return
+
+        winner_id, winner_name, winner_hours = weekly_hours_list[0]
+        loser_id, loser_name, loser_hours = weekly_hours_list[1]
+
+        total = winner_hours + loser_hours
         if total > 0:
-            v_pct = v_hours / total * 100
-            u_pct = u_hours / total * 100
+            w_pct = winner_hours / total * 100
+            l_pct = loser_hours / total * 100
         else:
-            v_pct = u_pct = 50
+            w_pct = l_pct = 50
 
         # Visual bar
         bar_len = 20
-        v_bar = int(v_pct / 100 * bar_len)
-        u_bar = bar_len - v_bar
-        bar = "🟦" * v_bar + "🟪" * u_bar
+        w_bar = int(w_pct / 100 * bar_len)
+        l_bar = bar_len - w_bar
+        bar = "🟦" * w_bar + "🟪" * l_bar
 
-        if v_hours > u_hours:
-            status = f"🏆 **{v_name}** is WINNING by **{v_hours - u_hours:.1f}h**!"
+        if winner_hours > loser_hours:
+            status = f"🏆 **{winner_name}** is WINNING by **{winner_hours - loser_hours:.1f}h**!"
             color = 0x5865F2
-        elif u_hours > v_hours:
-            status = f"🏆 **{u_name}** is WINNING by **{u_hours - v_hours:.1f}h**!"
-            color = 0xEB459E
         else:
-            status = "⚔️ It's a **TIE**! Who breaks it first?"
+            status = f"⚔️ It's a **TIE** between **{winner_name}** and **{loser_name}**!"
             color = 0xFEE75C
 
         # Days left in the week
@@ -590,8 +589,8 @@ class BonusFeaturesCog(commands.Cog):
             title="⚔️ Weekly Duel — LIVE",
             description=(
                 f"{status}\n\n"
-                f"🟦 **{v_name}**: **{v_hours:.1f}h** ({v_pct:.0f}%)\n"
-                f"🟪 **{u_name}**: **{u_hours:.1f}h** ({u_pct:.0f}%)\n\n"
+                f"🟦 **{winner_name}**: **{winner_hours:.1f}h** ({w_pct:.0f}%)\n"
+                f"🟪 **{loser_name}**: **{loser_hours:.1f}h** ({l_pct:.0f}%)\n\n"
                 f"{bar}\n\n"
                 f"📅 **{days_left} day(s)** left this week"
             ),

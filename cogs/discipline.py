@@ -183,12 +183,29 @@ class DisciplineCog(commands.Cog):
 
         guild = general_channel.guild
 
-        for uid_str in [VALENCE_ID, UJJWAL_ID]:
-            if uid_str not in users:
-                continue
+        # Sort users by yesterday's seconds to find comparison peers
+        now_ist = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=5, minutes=30)
+        yesterday = (now_ist - datetime.timedelta(days=1)).date().isoformat()
 
-            other_uid_str = UJJWAL_ID if uid_str == VALENCE_ID else VALENCE_ID
-            other_user_data = users.get(other_uid_str, {})
+        yesterday_seconds_list = []
+        for u_id, u_data in users.items():
+            sec = u_data.get("daily_history", {}).get(yesterday, 0)
+            yesterday_seconds_list.append((u_id, sec))
+        yesterday_seconds_list.sort(key=lambda x: x[1], reverse=True)
+
+        for uid_str in list(users.keys()):
+            # Find the other user to compare against (the top studier yesterday, or second if this user was top)
+            other_uid_str = None
+            other_seconds = 0
+            if len(yesterday_seconds_list) > 1:
+                if yesterday_seconds_list[0][0] == uid_str:
+                    other_uid_str = yesterday_seconds_list[1][0]
+                    other_seconds = yesterday_seconds_list[1][1]
+                else:
+                    other_uid_str = yesterday_seconds_list[0][0]
+                    other_seconds = yesterday_seconds_list[0][1]
+
+            other_user_data = users.get(other_uid_str, {}) if other_uid_str else {}
             my_data = users[uid_str]
 
             # Calculate yesterday's date in IST
@@ -206,14 +223,19 @@ class DisciplineCog(commands.Cog):
                 async with self.bot.db_write_lock:
                     await self.bot.save_data(data)
 
-                member = guild.get_member(int(uid_str))
-                if not member:
-                    try:
-                        member = await guild.fetch_member(int(uid_str))
-                    except Exception:
-                        member = None
-                other_name = other_user_data.get("username", "your partner")
-                other_hours = other_seconds / 3600
+                try:
+                    uid_int = int(uid_str)
+                    member = guild.get_member(uid_int)
+                    if not member:
+                        member = await guild.fetch_member(uid_int)
+                except Exception:
+                    member = None
+                if other_uid_str:
+                    other_name = other_user_data.get("username", "your partner")
+                    other_hours = other_seconds / 3600
+                else:
+                    other_name = "the daily goal"
+                    other_hours = 1.5
 
                 # 1. TOXIC DM
                 if member:
@@ -333,32 +355,51 @@ class DisciplineCog(commands.Cog):
         if not general_channel:
             return
         guild = general_channel.guild
+        # Get today's hours for all users
+        today_str = now_ist.date().isoformat()
+        today_seconds_list = []
+        for u_id, u_data in users.items():
+            sec = u_data.get("daily_history", {}).get(today_str, 0)
+            today_seconds_list.append((u_id, sec))
+        today_seconds_list.sort(key=lambda x: x[1], reverse=True)
 
-        for uid_str in [VALENCE_ID, UJJWAL_ID]:
-            if uid_str not in users:
-                continue
-
+        for uid_str in list(users.keys()):
             # Skip if they're currently in a study channel
             if self._is_user_studying(guild, int(uid_str)):
                 logging.info(f"[DISCIPLINE] Skipping nag for {uid_str} — currently studying")
                 continue
 
-            other_uid_str = UJJWAL_ID if uid_str == VALENCE_ID else VALENCE_ID
-            other_data = users.get(other_uid_str, {})
+            # Find peer to compare
+            other_uid_str = None
+            other_today = 0.0
+            if len(today_seconds_list) > 1:
+                if today_seconds_list[0][0] == uid_str:
+                    other_uid_str = today_seconds_list[1][0]
+                    other_today = today_seconds_list[1][1] / 3600
+                else:
+                    other_uid_str = today_seconds_list[0][0]
+                    other_today = today_seconds_list[0][1] / 3600
+
+            other_data = users.get(other_uid_str, {}) if other_uid_str else {}
             my_data = users[uid_str]
 
             # Get today's hours for both users
             today_str = now_ist.date().isoformat()
             my_today = my_data.get("daily_history", {}).get(today_str, 0) / 3600
-            other_today = other_data.get("daily_history", {}).get(today_str, 0) / 3600
-            other_name = other_data.get("username", "your partner")
+            if other_uid_str:
+                other_today = other_data.get("daily_history", {}).get(today_str, 0) / 3600
+                other_name = other_data.get("username", "your partner")
+            else:
+                other_today = 1.5
+                other_name = "the daily goal"
 
-            member = guild.get_member(int(uid_str))
-            if not member:
-                try:
-                    member = await guild.fetch_member(int(uid_str))
-                except Exception:
-                    member = None
+            try:
+                uid_int = int(uid_str)
+                member = guild.get_member(uid_int)
+                if not member:
+                    member = await guild.fetch_member(uid_int)
+            except Exception:
+                member = None
             if not member:
                 continue
 
@@ -440,9 +481,22 @@ class DisciplineCog(commands.Cog):
         yesterday = (now_ist - datetime.timedelta(days=1)).date().isoformat()
         absent_mentions = []
 
-        for uid_str in [VALENCE_ID, UJJWAL_ID]:
-            if uid_str not in users:
+        for uid_str in list(users.keys()):
+            try:
+                uid_int = int(uid_str)
+            except ValueError:
                 continue
+
+            guild = study_channel.guild
+            member = guild.get_member(uid_int)
+            if not member:
+                try:
+                    member = await guild.fetch_member(uid_int)
+                except Exception:
+                    member = None
+            if not member:
+                continue
+
             yesterday_seconds = users[uid_str].get("daily_history", {}).get(yesterday, 0)
             if yesterday_seconds == 0:
                 absent_mentions.append(f"<@{uid_str}>")
