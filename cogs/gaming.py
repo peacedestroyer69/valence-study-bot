@@ -230,112 +230,126 @@ class GamingCog(commands.Cog):
     # ------------------------------------------------------------------
     @tasks.loop(minutes=5)
     async def chess_poll_loop(self):
-        """Polls Lichess every 5 minutes for head-to-head matches between Valence and Ujjwal."""
+        """Polls Lichess every 5 minutes for head-to-head matches between all linked users."""
         data = await self.bot.load_data()
         users = data.get("users", {})
 
-        val_data = users.get(VALENCE_ID, {})
-        ujj_data = users.get(UJJWAL_ID, {})
+        # Build a mapping of lichess_username (lowercase) -> discord_user_id
+        lichess_map = {}
+        for uid_str, udata in users.items():
+            lichess_username = udata.get("chess_accounts", {}).get("lichess")
+            if lichess_username:
+                lichess_map[lichess_username.lower()] = uid_str
 
-        val_lichess = val_data.get("chess_accounts", {}).get("lichess")
-        ujj_lichess = ujj_data.get("chess_accounts", {}).get("lichess")
-
-        if not val_lichess or not ujj_lichess:
-            return  # Both users must have linked accounts
+        if len(lichess_map) < 2:
+            return
 
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {"Accept": "application/x-ndjson"}
-                url = f"https://lichess.org/api/games/user/{val_lichess}?vs={ujj_lichess}&max=1"
+                # Poll Lichess for each user's recent games
+                for lichess_username, uid_str in lichess_map.items():
+                    url = f"https://lichess.org/api/games/user/{lichess_username}?max=5"
+                    try:
+                        async with session.get(url, headers=headers) as resp:
+                            if resp.status != 200:
+                                continue
 
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        return
+                            game_data_raw = await resp.text()
+                            if not game_data_raw.strip():
+                                continue
 
-                    game_data_raw = await resp.text()
-                    if not game_data_raw.strip():
-                        return
+                            # Process games line by line (NDJSON format)
+                            for line in game_data_raw.strip().split("\n"):
+                                if not line.strip():
+                                    continue
+                                game_data = json.loads(line)
+                                game_id = game_data.get("id")
+                                if not game_id:
+                                    continue
 
-                    # NDJSON: split on actual newline, take first line
-                    first_line = game_data_raw.strip().split("\n")[0]
-                    game_data = json.loads(first_line)
-                    game_id = game_data.get("id")
+                                # Check if we already processed this game
+                                processed_games = data.get("processed_chess_games", [])
+                                if game_id in processed_games:
+                                    continue
 
-                    if not game_id:
-                        return
+                                # Check if the opponent is also a linked user
+                                white_user = game_data.get("players", {}).get("white", {}).get("user", {}).get("name", "")
+                                black_user = game_data.get("players", {}).get("black", {}).get("user", {}).get("name", "")
 
-                    # Check if we already processed this game
-                    processed_games = data.get("processed_chess_games", [])
-                    if game_id in processed_games:
-                        return
+                                if not white_user or not black_user:
+                                    continue
 
-                    winner_color = game_data.get("winner")
-                    if not winner_color:
-                        return  # Draw or ongoing
+                                white_lower = white_user.lower()
+                                black_lower = black_user.lower()
 
-                    # Determine who won
-                    winner_username = (
-                        game_data.get("players", {})
-                        .get(winner_color, {})
-                        .get("user", {})
-                        .get("name", "")
-                    )
+                                if white_lower in lichess_map and black_lower in lichess_map:
+                                    # This is a head-to-head match between two linked users!
+                                    winner_color = game_data.get("winner")
+                                    if not winner_color:
+                                        continue  # Draw or ongoing
 
-                    if winner_username.lower() == val_lichess.lower():
-                        winner_discord = f"<@{VALENCE_ID}>"
-                        loser_discord = f"<@{UJJWAL_ID}>"
-                        winner_id = VALENCE_ID
-                        loser_id = UJJWAL_ID
-                    else:
-                        winner_discord = f"<@{UJJWAL_ID}>"
-                        loser_discord = f"<@{VALENCE_ID}>"
-                        winner_id = UJJWAL_ID
-                        loser_id = VALENCE_ID
+                                    winner_lichess = white_user if winner_color == "white" else black_user
+                                    loser_lichess = black_user if winner_color == "white" else white_user
 
-                    # Update gaming stats
-                    for uid in [winner_id, loser_id]:
-                        if uid not in data["users"]:
-                            data["users"][uid] = {}
-                        data["users"][uid].setdefault("gaming_wins", 0)
-                        data["users"][uid].setdefault("gaming_losses", 0)
+                                    winner_id = lichess_map[winner_lichess.lower()]
+                                    loser_id = lichess_map[loser_lichess.lower()]
 
-                    data["users"][winner_id]["gaming_wins"] += 1
-                    data["users"][loser_id]["gaming_losses"] += 1
+                                    winner_discord = f"<@{winner_id}>"
+                                    loser_discord = f"<@{loser_id}>"
 
-                    # Announce in chess text channel
-                    speed = game_data.get("speed", "unknown")
-                    channel = self.bot.get_channel(
-                        CHESS_TEXT_CHANNEL_ID
-                    ) or self.bot.get_channel(GENERAL_CHANNEL_ID)
+                                    # Update gaming stats & mark game as processed inside write lock
+                                    async with self.bot.db_write_lock:
+                                        data = await self.bot.load_data()
+                                        
+                                        # Recheck inside lock
+                                        p_games = data.get("processed_chess_games", [])
+                                        if game_id in p_games:
+                                            continue
 
-                    if channel:
-                        embed = discord.Embed(
-                            title="🤖 AUTO-RESOLVED CHESS MATCH 🤖",
-                            description=(
-                                f"{winner_discord} destroyed {loser_discord} on Lichess!\n\n"
-                                f"⚡ Speed: **{speed.capitalize()}**\n"
-                                f"🆔 Game: `{game_id}`"
-                            ),
-                            color=0x57F287,
-                        )
-                        embed.set_footer(text="Pulled automatically from Lichess API")
-                        await channel.send(embed=embed)
+                                        for uid in [winner_id, loser_id]:
+                                            if uid not in data["users"]:
+                                                data["users"][uid] = {}
+                                            data["users"][uid].setdefault("gaming_wins", 0)
+                                            data["users"][uid].setdefault("gaming_losses", 0)
 
-                    # Mark game as processed (keep last 50)
-                    async with self.bot.db_write_lock:
-                        data = await self.bot.load_data()
-                        p_games = data.get("processed_chess_games", [])
-                        p_games.append(game_id)
-                        data["processed_chess_games"] = p_games[-50:]
-                        await self.bot.save_data(data)
+                                        data["users"][winner_id]["gaming_wins"] += 1
+                                        data["users"][loser_id]["gaming_losses"] += 1
 
-                    logging.info(
-                        f"[GAMING] Auto-resolved Lichess game {game_id}: "
-                        f"{winner_username} won ({speed})"
-                    )
+                                        p_games.append(game_id)
+                                        data["processed_chess_games"] = p_games[-50:]
+                                        await self.bot.save_data(data)
+
+                                    # Announce in chess text channel
+                                    speed = game_data.get("speed", "unknown")
+                                    channel = self.bot.get_channel(
+                                        CHESS_TEXT_CHANNEL_ID
+                                    ) or self.bot.get_channel(GENERAL_CHANNEL_ID)
+
+                                    if channel:
+                                        embed = discord.Embed(
+                                            title="🤖 AUTO-RESOLVED CHESS MATCH 🤖",
+                                            description=(
+                                                f"{winner_discord} destroyed {loser_discord} on Lichess!\n\n"
+                                                f"⚡ Speed: **{speed.capitalize()}**\n"
+                                                f"🆔 Game: `{game_id}`"
+                                            ),
+                                            color=0x57F287,
+                                        )
+                                        embed.set_footer(text="Pulled automatically from Lichess API")
+                                        await channel.send(embed=embed)
+
+                                    logging.info(
+                                        f"[GAMING] Auto-resolved Lichess game {game_id}: "
+                                        f"{winner_lichess} won against {loser_lichess} ({speed})"
+                                    )
+                    except Exception as e:
+                        logging.error(f"[GAMING] Error polling Lichess for {lichess_username}: {e}")
+                    # Small sleep between polls
+                    await asyncio.sleep(1)
 
         except Exception as e:
-            logging.error(f"[GAMING] Error polling Lichess: {e}")
+            logging.error(f"[GAMING] Error in chess_poll_loop: {e}")
 
     @chess_poll_loop.before_loop
     async def before_poll(self):

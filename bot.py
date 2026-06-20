@@ -55,25 +55,24 @@ CELEBRATION_CHANNEL_ID = int(os.getenv("CELEBRATION_CHANNEL_ID", "0"))
 
 # --- Hardcoded Configuration ---
 
-# Maps total WEEKLY hours (int) -> Discord Role ID (int)
-# Roles reset every Monday — only the HIGHEST is kept.
-# Thresholds are for a single week (168h max).
+# Maps total focused study hours (all-time) (int) -> Discord Role ID (int)
+# Only the HIGHEST is kept.
 MILESTONE_ROLES = {
-    5:   1514208595737182338,  # 🥉 Bronze Scholar     — 5h/week (~45 min/day)
-    15:  1514208694051672195,  # 🥈 Silver Grinder     — 15h/week (~2h/day)
-    30:  1514210766256082954,  # 🥇 Gold Grinder       — 30h/week (~4.3h/day)
-    50:  1514208770887127192,  # 💎 Diamond Grindmaster — 50h/week (~7h/day)
-    70:  1514208898406416505,  # 👑 Legendary Studier   — 70h/week (~10h/day beast mode)
+    5:   1514208595737182338,  # 🥉 Bronze Scholar     — 5 hours
+    25:  1514208694051672195,  # 🥈 Silver Grinder     — 25 hours
+    50:  1514210766256082954,  # 🥇 Gold Grinder       — 50 hours
+    100: 1514208770887127192,  # 💎 Diamond Grindmaster — 100 hours
+    200: 1514208898406416505,  # 👑 Legendary Studier   — 200 hours
 }
 
-# Doubt milestone roles — awarded based on WEEKLY doubt session hours
-# Reset every Monday, only highest kept.
+# Doubt milestone roles — awarded based on total doubt session hours (all-time)
+# Only the HIGHEST is kept.
 DOUBT_MILESTONE_ROLES = {
-    1:   1514228187352268830,  # 🟢 Doubt Beginner     — 1h/week
-    3:   1514238409449930752,  # 🧠 Doubt Explorer     — 3h/week
-    5:   1514238834559291563,  # 💡 Doubt Master       — 5h/week
-    10:  1514238964008226988,  # 🎓 Doubt Professor    — 10h/week
-    15:  1514254737372090438,  # 🧿 Never Had a Doubt  — 15h/week (2h/day doubting)
+    2:   1514228187352268830,  # 🔰 Doubt Beginner     — 2 hours
+    5:   1514238409449930752,  # 🧠 Doubt Explorer     — 5 hours
+    10:  1514238834559291563,  # 💡 Doubt Master       — 10 hours
+    25:  1514238964008226988,  # 🎓 Doubt Professor    — 25 hours
+    50:  1514254737372090438,  # 🧿 Never Had a Doubt in Life — 50 hours
 }
 
 # Minimum session length in seconds to count (prevents AFK abuse)
@@ -110,12 +109,13 @@ DISCUSSION_CHANNELS = {1514187630374289418}  # General
 # Text study channels: messages are counted for a text activity leaderboard
 STUDY_TEXT_CHANNELS = {1514241642415001610}  # Study Discussion
 
-# Text activity milestone roles — based on WEEKLY messages, reset every Monday
+# Text activity milestone roles — based on total messages (all-time) sent in Study Discussion
+# Only the HIGHEST is kept.
 TEXT_MILESTONE_ROLES = {
-    10:  1514254760386236496,  # 📝 Active Learner (10 msgs/week)
-    30:  1514255291578056714,  # 💬 Discussion Pro (30 msgs/week)
-    75:  1514255438093484083,  # 🗣️ Knowledge Sharer (75 msgs/week)
-    150: 1514255518288576672,  # 📖 Study Sage (150 msgs/week)
+    250:  1284567890123456799,  # 📝 Active Learner (250 msgs)
+    1000: 1284567890123456800,  # 💬 Discussion Pro (1000 msgs)
+    2500: 1284567890123456801,  # 🗣️ Knowledge Sharer (2500 msgs)
+    5000: 1284567890123456802,  # 📖 Study Sage (5000 msgs)
 }
 
 
@@ -223,12 +223,14 @@ def _default_user(username: str) -> dict:
 
 
 def get_channel_type(channel_id: int) -> str:
-    """Returns the channel category: 'study', 'doubt', or 'discussion'."""
+    """Returns the channel category: 'study', 'doubt', 'discussion', or 'untracked'."""
     if channel_id in DOUBT_CHANNELS:
         return "doubt"
     if channel_id in DISCUSSION_CHANNELS:
         return "discussion"
-    return "study"
+    if channel_id in STUDY_CHANNELS or channel_id == POMODORO_CHANNEL_ID:
+        return "study"
+    return "untracked"
 
 
 # ============================================================
@@ -444,6 +446,36 @@ def get_streak_display(streak: int) -> str:
     return f"⚡🔥 {streak} day streak — ELITE"
 
 
+def generate_milestone_progress(total_hours: float) -> str:
+    """Generates progress bar and text for the next milestone role."""
+    milestones = [5, 25, 50, 100, 200]
+    next_m = None
+    next_role_name = ""
+    role_names = {
+        5: "Bronze Scholar (5h)",
+        25: "Silver Grinder (25h)",
+        50: "Gold Grinder (50h)",
+        100: "Diamond Grindmaster (100h)",
+        200: "Legendary Studier (200h)"
+    }
+    for m in milestones:
+        if total_hours < m:
+            next_m = m
+            next_role_name = role_names[m]
+            break
+            
+    if next_m is None:
+        return "👑 **Max Milestone Reached!** (Legendary Studier)"
+        
+    # Generate bar: 10 blocks
+    progress = total_hours / next_m
+    filled_blocks = int(progress * 10)
+    filled_blocks = max(0, min(10, filled_blocks))
+    empty_blocks = 10 - filled_blocks
+    bar = "🟩" * filled_blocks + "⬜" * empty_blocks
+    return f"{bar} {total_hours:.1f}/{next_m}h to **{next_role_name}** ({progress*100:.1f}%)"
+
+
 def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
     """Builds the full leaderboard embed for alltime, weekly, or doubt mode."""
     if mode == "weekly":
@@ -606,37 +638,65 @@ async def update_leaderboard_embed(mode: str = "alltime"):
         async with bot.db_write_lock:
             data = await load_data()
             channel = bot.get_channel(LEADERBOARD_CHANNEL_ID)
-        if channel is None:
-            logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
-            return
-
-        embed = build_leaderboard_embed(data, mode)
-        view = LeaderboardView(mode)
-        msg_id = data["meta"].get("leaderboard_message_id")
-
-        if msg_id is not None:
-            try:
-                msg = await channel.fetch_message(msg_id)
-                await msg.edit(embed=embed, view=view)
+            if channel is None:
+                logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
                 return
-            except (discord.NotFound, discord.HTTPException):
-                logging.warning("Previous leaderboard message not found. Sending new one.")
 
-        msg = await channel.send(embed=embed, view=view)
-        data["meta"]["leaderboard_message_id"] = msg.id
-        await save_data(data)
+            embed = build_leaderboard_embed(data, mode)
+            view = LeaderboardView(mode)
+            msg_id = data["meta"].get("leaderboard_message_id")
+
+            if msg_id is not None:
+                try:
+                    msg = await channel.fetch_message(msg_id)
+                    await msg.edit(embed=embed, view=view)
+                    return
+                except (discord.NotFound, discord.HTTPException):
+                    logging.warning("Previous leaderboard message not found. Sending new one.")
+
+            msg = await channel.send(embed=embed, view=view)
+            data["meta"]["leaderboard_message_id"] = msg.id
+            await save_data(data)
     except Exception as e:
         logging.error(f"Failed to update leaderboard embed: {e}")
 
 
 class LeaderboardView(discord.ui.View):
-    """Persistent view attached to the leaderboard message with refresh button and view selector."""
+    """Persistent view attached to the leaderboard message with buttons to toggle views."""
 
     def __init__(self, initial_mode: str = "alltime"):
         super().__init__(timeout=None)
         self.current_mode = initial_mode
+        
+        # Highlight current button
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id:
+                if child.custom_id == f"ypt_btn_{initial_mode}":
+                    child.style = discord.ButtonStyle.primary
+                elif child.custom_id.startswith("ypt_btn_") and child.custom_id != "ypt_btn_refresh":
+                    child.style = discord.ButtonStyle.secondary
 
-    @discord.ui.button(label="🔄 Refresh Stats", style=discord.ButtonStyle.primary, custom_id="ypt_refresh_btn")
+    @discord.ui.button(label="🏆 All-Time", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_alltime", row=0)
+    async def alltime_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch_mode(interaction, "alltime")
+
+    @discord.ui.button(label="📅 Weekly", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_weekly", row=0)
+    async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch_mode(interaction, "weekly")
+
+    @discord.ui.button(label="📊 Daily", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_daily", row=0)
+    async def daily_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch_mode(interaction, "daily")
+
+    @discord.ui.button(label="❓ Doubts", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_doubt", row=0)
+    async def doubt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch_mode(interaction, "doubt")
+
+    @discord.ui.button(label="💬 Messages", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_messages", row=0)
+    async def messages_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._switch_mode(interaction, "messages")
+
+    @discord.ui.button(label="🔄 Refresh Stats", style=discord.ButtonStyle.primary, custom_id="ypt_btn_refresh", row=1)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Refreshes the leaderboard stats in-place."""
         try:
@@ -651,44 +711,13 @@ class LeaderboardView(discord.ui.View):
         except Exception as e:
             logging.error(f"Refresh button error: {e}")
 
-    @discord.ui.select(
-        placeholder="📊 Switch View...",
-        custom_id="ypt_view_selector",
-        options=[
-            discord.SelectOption(
-                label="All-Time Records",
-                value="alltime",
-                emoji="🏆",
-                description="Total hours since the beginning",
-            ),
-            discord.SelectOption(
-                label="Weekly Standings",
-                value="weekly",
-                emoji="📅",
-                description="This week's grind only",
-            ),
-            discord.SelectOption(
-                label="Doubt Standings",
-                value="doubt",
-                emoji="❓",
-                description="Who's clearing the most doubts?",
-            ),
-            discord.SelectOption(
-                label="Text Activity",
-                value="messages",
-                emoji="💬",
-                description="Who's most active in study discussions?",
-            ),
-        ],
-    )
-    async def view_selector(self, interaction: discord.Interaction, select: discord.ui.Select):
-        """Switches between all-time and weekly leaderboard views."""
+    async def _switch_mode(self, interaction: discord.Interaction, mode: str):
         try:
-            self.current_mode = select.values[0]
+            self.current_mode = mode
             await interaction.response.defer()
-            await update_leaderboard_embed(self.current_mode)
+            await update_leaderboard_embed(mode)
         except Exception as e:
-            logging.error(f"View selector error: {e}")
+            logging.error(f"Switch mode error: {e}")
 
 
 # ============================================================
@@ -1070,6 +1099,7 @@ async def check_weekly_reset(data: dict):
     while True:
         try:
             await asyncio.sleep(3600)  # Check every hour
+            
             do_weekly_reset = False
             winner_uid = None
             winner_seconds = 0
@@ -1113,19 +1143,8 @@ async def check_weekly_reset(data: dict):
                 await save_data(data)
 
             if do_weekly_reset:
-                # --- Strip ALL milestone roles from everyone (weekly reset) ---
-                all_role_ids = set(MILESTONE_ROLES.values()) | set(DOUBT_MILESTONE_ROLES.values()) | set(TEXT_MILESTONE_ROLES.values())
-                for guild in bot.guilds:
-                    for member in guild.members:
-                        if member.bot:
-                            continue
-                        roles_to_strip = [r for r in member.roles if r.id in all_role_ids]
-                        if roles_to_strip:
-                            try:
-                                await member.remove_roles(*roles_to_strip, reason="Weekly reset — all milestone roles cleared")
-                                logging.info(f"[WEEKLY RESET] Stripped {len(roles_to_strip)} roles from {member.display_name}")
-                            except Exception as e:
-                                logging.error(f"Failed to strip roles from {member.display_name}: {e}")
+                # Milestone roles are persistent/lifetime achievements (alltime metrics), so we do NOT strip them on weekly reset.
+                pass
 
                 # Send weekly winner announcement
                 if winner_uid is not None and winner_seconds > 0:
@@ -1160,14 +1179,14 @@ async def check_weekly_reset(data: dict):
 
 async def check_and_award_milestones(member: discord.Member, data: dict):
     """Awards the HIGHEST earned study role and removes all lower ones.
-    Uses WEEKLY hours so roles reset every Monday."""
+    Uses all-time hours for milestones."""
     try:
         uid = str(member.id)
         udata = data["users"].get(uid)
         if udata is None:
             return
 
-        total_hours = udata.get("total_seconds_weekly", 0) / 3600
+        total_hours = udata.get("total_seconds_alltime", 0) / 3600
         guild = member.guild
 
         # Find the highest milestone the user qualifies for
@@ -1178,10 +1197,9 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                 earned_threshold = hours_threshold
                 earned_role_id = MILESTONE_ROLES[hours_threshold]
 
-        # Remove ALL milestone roles first, then add only the highest
+        # Determine which roles to remove
         all_milestone_role_ids = set(MILESTONE_ROLES.values())
-        already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
-        roles_to_remove = [r for r in member.roles if r.id in all_milestone_role_ids]
+        roles_to_remove = [r for r in member.roles if r.id in all_milestone_role_ids and r.id != earned_role_id]
         if roles_to_remove:
             try:
                 await member.remove_roles(*roles_to_remove, reason="Milestone role update — removing lower tiers")
@@ -1190,29 +1208,29 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
 
         # Award the highest earned role
         if earned_role_id:
-            role = guild.get_role(earned_role_id)
-            if role is None:
-                logging.warning(f"Milestone role {earned_role_id} not found in guild.")
-                return
-
-            try:
-                await member.add_roles(role, reason=f"YPT milestone: {earned_threshold}h this week")
-            except discord.Forbidden:
-                logging.error(f"No permission to assign role {role.name} to {member.display_name}")
-                return
-            except discord.HTTPException as e:
-                logging.error(f"Failed to assign milestone role: {e}")
-                return
-
-            # Only celebrate if they didn't already have this exact role
+            already_has = discord.utils.get(member.roles, id=earned_role_id)
             if not already_has:
+                role = guild.get_role(earned_role_id)
+                if role is None:
+                    logging.warning(f"Milestone role {earned_role_id} not found in guild.")
+                    return
+
+                try:
+                    await member.add_roles(role, reason=f"YPT milestone: {earned_threshold} hours")
+                except discord.Forbidden:
+                    logging.error(f"No permission to assign role {role.name} to {member.display_name}")
+                    return
+                except discord.HTTPException as e:
+                    logging.error(f"Failed to assign milestone role: {e}")
+                    return
+
                 try:
                     channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
                     if channel:
                         embed = discord.Embed(
                             title="🎉 MILESTONE UNLOCKED!",
                             description=(
-                                f"{member.mention} just crossed **{earned_threshold} hours** this week! 🔥\n"
+                                f"{member.mention} just crossed **{earned_threshold} hours**! 🔥\n"
                                 f"Role **{role.name}** has been awarded!"
                             ),
                             color=0xFFD700,
@@ -1230,14 +1248,14 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
 
 async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
     """Awards the HIGHEST earned doubt role and removes all lower ones.
-    Uses WEEKLY doubt hours so roles reset every Monday."""
+    Uses all-time doubt hours."""
     try:
         uid = str(member.id)
         udata = data["users"].get(uid)
         if udata is None:
             return
 
-        total_hours = udata.get("total_seconds_doubt_weekly", 0) / 3600
+        total_hours = udata.get("total_seconds_doubt", 0) / 3600
         guild = member.guild
 
         # Find the highest doubt milestone the user qualifies for
@@ -1248,33 +1266,33 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                 earned_threshold = hours_threshold
                 earned_role_id = DOUBT_MILESTONE_ROLES[hours_threshold]
 
-        # Remove ALL doubt milestone roles first
+        # Determine which doubt roles to remove
         all_doubt_role_ids = set(DOUBT_MILESTONE_ROLES.values())
-        already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
-        roles_to_remove = [r for r in member.roles if r.id in all_doubt_role_ids]
+        roles_to_remove = [r for r in member.roles if r.id in all_doubt_role_ids and r.id != earned_role_id]
         if roles_to_remove:
             try:
-                await member.remove_roles(*roles_to_remove, reason="Doubt role update — removing lower tiers")
+                await member.remove_roles(*roles_to_remove, reason="Doubt role update — removing incorrect tiers")
             except (discord.Forbidden, discord.HTTPException) as e:
                 logging.error(f"Failed to remove old doubt roles: {e}")
 
         # Award the highest earned role
         if earned_role_id:
-            role = guild.get_role(earned_role_id)
-            if role is None:
-                logging.warning(f"Doubt role {earned_role_id} not found in guild.")
-                return
-
-            try:
-                await member.add_roles(role, reason=f"YPT doubt milestone: {earned_threshold}h")
-            except discord.Forbidden:
-                logging.error(f"No permission to assign role {role.name} to {member.display_name}")
-                return
-            except discord.HTTPException as e:
-                logging.error(f"Failed to assign doubt role: {e}")
-                return
-
+            already_has = discord.utils.get(member.roles, id=earned_role_id)
             if not already_has:
+                role = guild.get_role(earned_role_id)
+                if role is None:
+                    logging.warning(f"Doubt role {earned_role_id} not found in guild.")
+                    return
+
+                try:
+                    await member.add_roles(role, reason=f"YPT doubt milestone: {earned_threshold} hours")
+                except discord.Forbidden:
+                    logging.error(f"No permission to assign role {role.name} to {member.display_name}")
+                    return
+                except discord.HTTPException as e:
+                    logging.error(f"Failed to assign doubt role: {e}")
+                    return
+
                 try:
                     channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
                     if channel:
@@ -1328,12 +1346,22 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
     """Processes a voice channel join event."""
     try:
+        ch_type = get_channel_type(channel.id)
+        if ch_type == "untracked":
+            return
+
         # If user joins group pomodoro channel, cancel their individual pomodoro
         if channel.id == POMODORO_CHANNEL_ID and member.id in active_pomodoros:
-            task = active_pomodoros[member.id].get("task")
-            if task:
-                task.cancel()
-            active_pomodoros.pop(member.id, None)
+            pomo = active_pomodoros.get(member.id)
+            if pomo:
+                if pomo.get("current_phase") == "study":
+                    phase_elapsed = int(time.time()) - (pomo["phase_end"] - pomo["study_seconds"])
+                    added = max(0, min(phase_elapsed, pomo["study_seconds"]))
+                    pomo["total_study_seconds"] = pomo.get("total_study_seconds", 0) + added
+                    pomo["current_phase"] = "break"
+                task = pomo.get("task")
+                if task:
+                    task.cancel()
             try:
                 await member.send("\U0001f504 Your individual Pomodoro was cancelled because you joined the group Pomodoro channel.")
             except Exception:
@@ -1343,6 +1371,7 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
             data = await load_data()
             udata = ensure_user(data, member)
             udata["session_start_timestamp"] = int(time.time())
+            udata["session_channel_id"] = channel.id
             await save_data(data)
         logging.info(f"[SESSION START] {member.display_name} joined #{channel.name}")
         # Don't override pomodoro channel status — it has its own status loop
@@ -1356,82 +1385,51 @@ async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
 async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
     """Processes a voice channel leave event."""
     try:
+        ch_type = get_channel_type(channel.id)
+        if ch_type == "untracked":
+            return
+
         async with bot.db_write_lock:
+            data = await load_data()
+            uid = str(member.id)
+            udata = ensure_user(data, member)
 
-                data = await load_data()
-                uid = str(member.id)
-                udata = ensure_user(data, member)
+            start_ts = udata.get("session_start_timestamp")
+            if start_ts is None:
+                logging.warning(f"[SESSION END] {member.display_name} left but had no active session.")
+                await update_voice_channel_status(channel, None)
+                return
 
-                start_ts = udata.get("session_start_timestamp")
-                if start_ts is None:
-                    logging.warning(f"[SESSION END] {member.display_name} left but had no active session.")
-                    await update_voice_channel_status(channel, None)
-                    return
+            session_seconds = int(time.time()) - start_ts
 
-                session_seconds = int(time.time()) - start_ts
-
-                if session_seconds < MIN_SESSION_SECONDS:
-                    logging.info(
-                        f"[SESSION DISCARD] {member.display_name} -- {session_seconds}s "
-                        f"(below {MIN_SESSION_SECONDS}s minimum)"
-                    )
-                    udata["session_start_timestamp"] = None
-                    await save_data(data)
-                    await update_voice_channel_status(channel, None)
-                    await update_bot_presence(data)
-                    return
-
-                ch_type = get_channel_type(channel.id)
-                real_start_ts = start_ts  # Save BEFORE clearing
+            if session_seconds < MIN_SESSION_SECONDS:
+                logging.info(
+                    f"[SESSION DISCARD] {member.display_name} -- {session_seconds}s "
+                    f"(below {MIN_SESSION_SECONDS}s minimum)"
+                )
                 udata["session_start_timestamp"] = None
+                udata["session_channel_id"] = None
+                await save_data(data)
+                await update_voice_channel_status(channel, None)
+                await update_bot_presence(data)
+                return
 
-                if channel.id == POMODORO_CHANNEL_ID:
-                    # --- GROUP POMODORO: calculate study time excluding breaks ---
-                    study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
+            real_start_ts = start_ts  # Save BEFORE clearing
+            udata["session_start_timestamp"] = None
+            udata["session_channel_id"] = None
 
-                    if study_secs >= MIN_SESSION_SECONDS:
-                        udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
-                        udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
-                        udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
-                        udata["session_count"] = udata.get("session_count", 0) + 1
+            if channel.id == POMODORO_CHANNEL_ID:
+                # --- GROUP POMODORO: calculate study time excluding breaks ---
+                study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
 
-                        if study_secs > udata.get("longest_session_seconds", 0):
-                            udata["longest_session_seconds"] = study_secs
-                        if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                            udata["best_day_seconds"] = udata["total_seconds_today"]
-
-                        # Record daily history for heatmap
-                        today_str = datetime.date.today().isoformat()
-                        if "daily_history" not in udata:
-                            udata["daily_history"] = {}
-                        udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
-
-                        update_streak(udata)
-                        await save_data(data)
-
-                        total_time_in_channel = int(time.time()) - real_start_ts
-                        break_secs = total_time_in_channel - study_secs
-
-                        logging.info(f"[POMODORO END] {member.display_name} -- {format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}")
-
-                        await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
-                        await check_and_award_milestones(member, data)
-                        await update_leaderboard_embed(current_view_mode)
-                    else:
-                        logging.info(f"[POMODORO DISCARD] {member.display_name} -- {study_secs}s study (below minimum)")
-                        await save_data(data)
-
-                    await update_voice_channel_status(channel, None)
-                    await update_bot_presence(data)
-                elif ch_type == "study":
-                    # --- STUDY SESSION: full tracking ---
-                    udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
-                    udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
-                    udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
+                if study_secs >= MIN_SESSION_SECONDS:
+                    udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
+                    udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
+                    udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
                     udata["session_count"] = udata.get("session_count", 0) + 1
 
-                    if session_seconds > udata.get("longest_session_seconds", 0):
-                        udata["longest_session_seconds"] = session_seconds
+                    if study_secs > udata.get("longest_session_seconds", 0):
+                        udata["longest_session_seconds"] = study_secs
                     if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
                         udata["best_day_seconds"] = udata["total_seconds_today"]
 
@@ -1444,42 +1442,77 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                     update_streak(udata)
                     await save_data(data)
 
-                    logging.info(f"[STUDY END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                    total_time_in_channel = int(time.time()) - real_start_ts
+                    break_secs = total_time_in_channel - study_secs
 
-                    await send_session_log(member, session_seconds, data)
+                    logging.info(f"[POMODORO END] {member.display_name} -- {format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}")
+
+                    await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
                     await check_and_award_milestones(member, data)
                     await update_leaderboard_embed(current_view_mode)
-
-                    await update_voice_channel_status(channel, None)
-                    await update_bot_presence(data)
-
-                elif ch_type == "doubt":
-                    # --- DOUBT SESSION: tracked separately, no milestones ---
-                    udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
-                    udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
-                    udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
+                else:
+                    logging.info(f"[POMODORO DISCARD] {member.display_name} -- {study_secs}s study (below minimum)")
                     await save_data(data)
 
-                    logging.info(f"[DOUBT END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                await update_voice_channel_status(channel, None)
+                await update_bot_presence(data)
+            elif ch_type == "study":
+                # --- STUDY SESSION: full tracking ---
+                udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
+                udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
+                udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
+                udata["session_count"] = udata.get("session_count", 0) + 1
 
-                    await send_doubt_log(member, session_seconds, data, channel)
-                    await check_and_award_doubt_milestones(member, data)
+                if session_seconds > udata.get("longest_session_seconds", 0):
+                    udata["longest_session_seconds"] = session_seconds
+                if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                    udata["best_day_seconds"] = udata["total_seconds_today"]
 
-                    await update_voice_channel_status(channel, None)
-                    await update_bot_presence(data)
+                # Record daily history for heatmap
+                today_str = datetime.date.today().isoformat()
+                if "daily_history" not in udata:
+                    udata["daily_history"] = {}
+                udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
 
-                elif ch_type == "discussion":
-                    # --- DISCUSSION SESSION: log only, no achievements ---
-                    udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
-                    udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
-                    await save_data(data)
+                update_streak(udata)
+                await save_data(data)
 
-                    logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+                logging.info(f"[STUDY END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
 
-                    await send_discussion_log(member, session_seconds, data, channel)
+                await send_session_log(member, session_seconds, data)
+                await check_and_award_milestones(member, data)
+                await update_leaderboard_embed(current_view_mode)
 
-                    await update_voice_channel_status(channel, None)
-                    await update_bot_presence(data)
+                await update_voice_channel_status(channel, None)
+                await update_bot_presence(data)
+
+            elif ch_type == "doubt":
+                # --- DOUBT SESSION: tracked separately, no milestones ---
+                udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
+                udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
+                udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
+                await save_data(data)
+
+                logging.info(f"[DOUBT END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+
+                await send_doubt_log(member, session_seconds, data, channel)
+                await check_and_award_doubt_milestones(member, data)
+
+                await update_voice_channel_status(channel, None)
+                await update_bot_presence(data)
+
+            elif ch_type == "discussion":
+                # --- DISCUSSION SESSION: log only, no achievements ---
+                udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
+                udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
+                await save_data(data)
+
+                logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+
+                await send_discussion_log(member, session_seconds, data, channel)
+
+                await update_voice_channel_status(channel, None)
+                await update_bot_presence(data)
     except Exception as e:
         logging.error(f"Error handling voice leave for {member.display_name}: {e}")
 
@@ -1506,35 +1539,54 @@ async def on_message(message: discord.Message):
                 await save_data(data)
 
             # Award text milestone roles (only highest, remove lower)
-            total_msgs = udata.get("messages_weekly", 0)
+            total_msgs = udata.get("total_messages", 0)
             guild = message.guild
             if guild:
                 member = guild.get_member(message.author.id)
                 if member:
+                    earned_threshold = None
                     earned_role_id = None
                     for threshold in sorted(TEXT_MILESTONE_ROLES.keys()):
                         if total_msgs >= threshold:
+                            earned_threshold = threshold
                             earned_role_id = TEXT_MILESTONE_ROLES[threshold]
 
-                    # Check BEFORE removal to avoid celebration spam
-                    already_has = discord.utils.get(member.roles, id=earned_role_id) if earned_role_id else None
+                    # Check if they already have the correct highest role
+                    already_has = (member.get_role(earned_role_id) is not None) if earned_role_id else False
 
-                    # Remove all text milestone roles, then add highest
-                    all_text_role_ids = set(TEXT_MILESTONE_ROLES.values())
-                    roles_to_remove = [r for r in member.roles if r.id in all_text_role_ids]
-                    if roles_to_remove:
-                        try:
-                            await member.remove_roles(*roles_to_remove, reason="Text milestone update")
-                        except Exception:
-                            pass
-
-                    if earned_role_id:
-                        role = guild.get_role(earned_role_id)
-                        if role:
+                    if not already_has:
+                        # Remove all text milestone roles first that are not the earned one
+                        all_text_role_ids = set(TEXT_MILESTONE_ROLES.values())
+                        roles_to_remove = [r for r in member.roles if r.id in all_text_role_ids and r.id != earned_role_id]
+                        if roles_to_remove:
                             try:
-                                await member.add_roles(role, reason=f"Text milestone: {total_msgs} msgs/week")
-                            except Exception:
-                                pass
+                                await member.remove_roles(*roles_to_remove, reason="Text milestone update — removing lower/incorrect tiers")
+                            except Exception as e:
+                                logging.error(f"Failed to remove old text milestone roles: {e}")
+
+                        if earned_role_id:
+                            role = guild.get_role(earned_role_id)
+                            if role:
+                                try:
+                                    await member.add_roles(role, reason=f"Text milestone: {earned_threshold} messages")
+                                    # Celebration!
+                                    channel = bot.get_channel(CELEBRATION_CHANNEL_ID)
+                                    if channel:
+                                        embed = discord.Embed(
+                                            title="📝 TEXT MILESTONE UNLOCKED!",
+                                            description=(
+                                                f"{member.mention} just crossed **{earned_threshold} messages** in study discussion! 💬\n"
+                                                f"Role **{role.name}** has been awarded!"
+                                            ),
+                                            color=0x3498DB,
+                                            timestamp=datetime.datetime.now(datetime.UTC),
+                                        )
+                                        if member.display_avatar:
+                                            embed.set_thumbnail(url=member.display_avatar.url)
+                                        embed.set_footer(text="Keep the discussion going. Share the knowledge!")
+                                        await channel.send(embed=embed)
+                                except Exception as e:
+                                    logging.error(f"Failed to assign text milestone or celebrate: {e}")
         except Exception as e:
             logging.error(f"Error tracking message from {message.author.display_name}: {e}")
 
@@ -1625,11 +1677,11 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
                 color=0x57F287,  # Green
                 timestamp=datetime.datetime.now(datetime.UTC),
             )
-            embed.set_footer(text="Stretch, hydrate, breathe. You earned it. \U0001f331")
+            embed.set_footer(text="Relax. Rest. Rehydrate.")
 
         await log_channel.send(embed=embed)
     except Exception as e:
-        logging.error(f"Failed to send pomodoro alert: {e}")
+        logging.error(f"Pomodoro alert error: {e}")
 
 
 async def individual_pomodoro_loop(user_id: int):
@@ -1649,7 +1701,7 @@ async def individual_pomodoro_loop(user_id: int):
                 user = bot.get_user(user_id)
                 if user:
                     embed = discord.Embed(
-                        title=f"\U0001f534 Pomodoro #{cycle_num} \u2014 Study Time!",
+                        title=f"\U0001f504 Pomodoro #{cycle_num} \u2014 Study Time!",
                         description=f"Focus for **{study_secs // 60} minutes**. Go!",
                         color=0xED4245,
                         timestamp=datetime.datetime.now(datetime.UTC),
@@ -1691,37 +1743,73 @@ async def individual_pomodoro_loop(user_id: int):
     except Exception as e:
         logging.error(f"Individual pomodoro error for {user_id}: {e}")
     finally:
-        # Send session summary to study-logs channel
-        pomo = active_pomodoros.get(user_id, {})
-        total_study = pomo.get("total_study_seconds", 0)
-        cycles = pomo.get("cycle", 0)
-        if total_study > 0:
-            try:
-                log_ch = bot.get_channel(LOG_CHANNEL_ID)
-                user = bot.get_user(user_id)
-                if log_ch and user:
-                    accent = USER_COLORS.get(user_id, DEFAULT_COLOR)
-                    embed = discord.Embed(color=accent)
-                    embed.set_author(
-                        name=f"{user.display_name} — Personal Pomodoro Complete",
-                        icon_url=user.display_avatar.url if user.display_avatar else None,
-                    )
-                    if user.display_avatar:
-                        embed.set_thumbnail(url=user.display_avatar.url)
-                    embed.add_field(name="🍅 Type", value="Personal Pomodoro", inline=True)
-                    embed.add_field(name="🔄 Cycles", value=str(cycles), inline=True)
-                    embed.add_field(name="📚 Study Time", value=format_time(total_study), inline=True)
-                    study_min = pomo.get("study_seconds", 0) // 60
-                    break_min = pomo.get("break_seconds", 0) // 60
-                    embed.add_field(name="⚙️ Settings", value=f"{study_min}m study / {break_min}m break", inline=True)
-                    embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
-                    embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
-                    embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
-                    embed.timestamp = datetime.datetime.now(datetime.UTC)
-                    await log_ch.send(embed=embed)
-            except Exception as log_err:
-                logging.error(f"Failed to log individual pomo session: {log_err}")
-        active_pomodoros.pop(user_id, None)
+        pomo = active_pomodoros.pop(user_id, None)
+        if pomo:
+            total_study = pomo.get("total_study_seconds", 0)
+            cycles = pomo.get("cycle", 0)
+            if total_study > 0:
+                try:
+                    async with bot.db_write_lock:
+                        data = await load_data()
+                        member = None
+                        for guild in bot.guilds:
+                            member = guild.get_member(user_id)
+                            if member:
+                                break
+                        if not member:
+                            try:
+                                member = await bot.fetch_user(user_id)
+                            except Exception:
+                                pass
+
+                        if member:
+                            udata = ensure_user(data, member)
+                            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + total_study
+                            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + total_study
+                            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + total_study
+                            udata["session_count"] = udata.get("session_count", 0) + 1
+
+                            if total_study > udata.get("longest_session_seconds", 0):
+                                udata["longest_session_seconds"] = total_study
+                            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                                udata["best_day_seconds"] = udata["total_seconds_today"]
+
+                            today_str = datetime.date.today().isoformat()
+                            if "daily_history" not in udata:
+                                udata["daily_history"] = {}
+                            udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+
+                            update_streak(udata)
+                            await save_data(data)
+
+                            if isinstance(member, discord.Member):
+                                await check_and_award_milestones(member, data)
+                            
+                            await update_leaderboard_embed(current_view_mode)
+                            
+                            log_ch = bot.get_channel(LOG_CHANNEL_ID)
+                            if log_ch:
+                                accent = USER_COLORS.get(user_id, DEFAULT_COLOR)
+                                embed = discord.Embed(color=accent)
+                                embed.set_author(
+                                    name=f"{member.display_name} — Personal Pomodoro Complete",
+                                    icon_url=member.display_avatar.url if (hasattr(member, 'display_avatar') and member.display_avatar) else None,
+                                )
+                                if hasattr(member, 'display_avatar') and member.display_avatar:
+                                    embed.set_thumbnail(url=member.display_avatar.url)
+                                embed.add_field(name="🍅 Type", value="Personal Pomodoro", inline=True)
+                                embed.add_field(name="🔄 Cycles", value=str(cycles), inline=True)
+                                embed.add_field(name="📚 Study Time", value=format_time(total_study), inline=True)
+                                study_min = pomo.get("study_seconds", 0) // 60
+                                break_min = pomo.get("break_seconds", 0) // 60
+                                embed.add_field(name="⚙️ Settings", value=f"{study_min}m study / {break_min}m break", inline=True)
+                                embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
+                                embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
+                                embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
+                                embed.timestamp = datetime.datetime.now(datetime.UTC)
+                                await log_ch.send(embed=embed)
+                except Exception as log_err:
+                    logging.error(f"Error saving/logging personal pomodoro session: {log_err}")
 
 
 # ============================================================
@@ -1948,16 +2036,60 @@ async def on_ready():
     )
     logging.info(banner)
 
-    # Load data and check for orphaned sessions (crash recovery)
+    # Scan guilds for active voice sessions to prevent orphan wipe and track current states
+    active_member_vc = {}
+    for guild in bot.guilds:
+        for vc in guild.voice_channels:
+            for member in vc.members:
+                if not member.bot:
+                    active_member_vc[str(member.id)] = vc
+
+    # Load data and check active and orphaned sessions (crash recovery)
     data = await load_data()
-    for uid, udata in data.get("users", {}).items():
-        if udata.get("session_start_timestamp") is not None:
+    now_ts = int(time.time())
+    for uid, udata in list(data.get("users", {}).items()):
+        is_active = uid in active_member_vc
+        has_session = udata.get("session_start_timestamp") is not None
+        
+        if has_session and not is_active:
+            # Orphaned session - user left while bot was offline
             username = udata.get("username", uid)
             logging.warning(
                 f"[CRASH RECOVERY] Found orphaned session for {username} "
                 f"(started at {udata['session_start_timestamp']}). Clearing."
             )
             udata["session_start_timestamp"] = None
+            udata["session_channel_id"] = None
+        elif is_active and not has_session:
+            # User is in channel but has no session (e.g. joined while bot was offline)
+            current_vc = active_member_vc[uid]
+            ch_type = get_channel_type(current_vc.id)
+            if ch_type != "untracked":
+                username = udata.get("username", uid)
+                logging.info(
+                    f"[CRASH RECOVERY] User {username} is in #{current_vc.name} "
+                    f"but has no active session. Starting session now."
+                )
+                udata["session_start_timestamp"] = now_ts
+                udata["session_channel_id"] = current_vc.id
+        elif is_active and has_session:
+            # User is active and already has session start time
+            prev_channel_id = udata.get("session_channel_id")
+            current_vc = active_member_vc[uid]
+            if prev_channel_id == current_vc.id:
+                # Same channel, preserve!
+                logging.info(f"[CRASH RECOVERY] Preserving active session for {udata.get('username', uid)} in #{current_vc.name}")
+            else:
+                # Channel changed while bot was offline
+                ch_type = get_channel_type(current_vc.id)
+                if ch_type != "untracked":
+                    logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} channel changed from {prev_channel_id} to #{current_vc.name} offline. Starting new session.")
+                    udata["session_start_timestamp"] = now_ts
+                    udata["session_channel_id"] = current_vc.id
+                else:
+                    logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} moved to untracked channel #{current_vc.name} offline. Clearing session.")
+                    udata["session_start_timestamp"] = None
+                    udata["session_channel_id"] = None
     await save_data(data)
 
     # Start background tasks
@@ -2095,6 +2227,38 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
                 inline=False,
             )
 
+        # Next Milestone section
+        milestone_display = generate_milestone_progress(total_hours)
+        embed.add_field(
+            name="🏆 Next Milestone Progress",
+            value=milestone_display,
+            inline=False,
+        )
+
+        # Subject hours breakdown
+        subject_hours_dict = udata.get("subject_hours", {})
+        if subject_hours_dict:
+            sub_labels = {
+                "physics": "🧪 Physics",
+                "chemistry": "⚗️ Chemistry",
+                "maths": "📐 Maths",
+                "biology": "🧬 Biology",
+                "cs": "💻 CS",
+                "general": "🌍 General"
+            }
+            breakdown_parts = []
+            for sub_key, label in sub_labels.items():
+                secs = subject_hours_dict.get(sub_key, 0)
+                if secs > 0:
+                    breakdown_parts.append(f"{label}: **{format_time(secs)}**")
+            
+            if breakdown_parts:
+                embed.add_field(
+                    name="📚 Subject Breakdown",
+                    value=" • ".join(breakdown_parts),
+                    inline=False,
+                )
+
         embed.set_footer(text="Keep grinding. Every minute counts.")
 
         await interaction.response.send_message(embed=embed)
@@ -2167,6 +2331,7 @@ async def lb_command(interaction: discord.Interaction):
 @app_commands.choices(view=[
     app_commands.Choice(name="All-Time", value="alltime"),
     app_commands.Choice(name="Weekly", value="weekly"),
+    app_commands.Choice(name="Daily", value="daily"),
     app_commands.Choice(name="Doubt", value="doubt"),
     app_commands.Choice(name="Text Activity", value="messages"),
 ])
@@ -2359,25 +2524,28 @@ async def pomo_stop(interaction: discord.Interaction):
     """Stops the user's individual pomodoro."""
     try:
         uid = interaction.user.id
-        if uid not in active_pomodoros:
+        pomo = active_pomodoros.get(uid)
+        if pomo is None:
             await interaction.response.send_message(
                 "\U0001f645 You don't have an active Pomodoro.",
                 ephemeral=True,
             )
             return
 
-        pomo = active_pomodoros.pop(uid)
+        # Calculate partial study time if currently in study phase
+        if pomo.get("current_phase") == "study":
+            phase_elapsed = int(time.time()) - (pomo["phase_end"] - pomo["study_seconds"])
+            added = max(0, min(phase_elapsed, pomo["study_seconds"]))
+            pomo["total_study_seconds"] = pomo.get("total_study_seconds", 0) + added
+            pomo["current_phase"] = "break"
+
+        total_study = pomo.get("total_study_seconds", 0)
+        cycles = pomo.get("cycle", 0)
+
+        # Cancel the task. The task's finally block will handle saving & logging.
         task = pomo.get("task")
         if task:
             task.cancel()
-
-        total_study = pomo.get("total_study_seconds", 0)
-        # Add partial study time if currently in study phase
-        if pomo.get("current_phase") == "study":
-            phase_elapsed = int(time.time()) - (pomo["phase_end"] - pomo["study_seconds"])
-            total_study += max(0, min(phase_elapsed, pomo["study_seconds"]))
-
-        cycles = pomo.get("cycle", 0)
 
         embed = discord.Embed(
             title="\U0001f6d1 Pomodoro Stopped",
