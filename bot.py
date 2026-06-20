@@ -112,10 +112,10 @@ STUDY_TEXT_CHANNELS = {1514241642415001610}  # Study Discussion
 # Text activity milestone roles — based on total messages (all-time) sent in Study Discussion
 # Only the HIGHEST is kept.
 TEXT_MILESTONE_ROLES = {
-    250:  1284567890123456799,  # 📝 Active Learner (250 msgs)
-    1000: 1284567890123456800,  # 💬 Discussion Pro (1000 msgs)
-    2500: 1284567890123456801,  # 🗣️ Knowledge Sharer (2500 msgs)
-    5000: 1284567890123456802,  # 📖 Study Sage (5000 msgs)
+    50:   1514254760386236496,  # 📝 Active Learner (50 msgs)
+    200:  1514255291578056714,  # 💬 Discussion Pro (200 msgs)
+    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 msgs)
+    1000: 1514255518288576672,  # 📖 Study Sage (1000 msgs)
 }
 
 
@@ -482,6 +482,10 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
         title = "📅 Weekly Standings"
         sort_key = "total_seconds_weekly"
         embed_color = 0x5865F2
+    elif mode == "daily":
+        title = "📊 Daily Standings"
+        sort_key = "total_seconds_today"
+        embed_color = 0xEB459E
     elif mode == "doubt":
         title = "❓ Doubt Session Leaderboard"
         sort_key = "total_seconds_doubt"
