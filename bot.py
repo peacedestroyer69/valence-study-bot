@@ -2141,6 +2141,10 @@ async def on_member_join(member: discord.Member):
         async with bot.db_write_lock:
             data = await load_data()
             ensure_user(data, member)
+            # Reset strikes on rejoin to prevent persistent kick loop
+            uid = str(member.id)
+            if uid in data["users"]:
+                data["users"][uid]["discipline_strikes"] = 0
             await save_data(data)
         logging.info(f"[MEMBER JOIN] Registered new member: {member.display_name} ({member.id})")
     except Exception as e:
