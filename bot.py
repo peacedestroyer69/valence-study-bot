@@ -2050,6 +2050,13 @@ async def on_ready():
 
     # Load data and check active and orphaned sessions (crash recovery)
     data = await load_data()
+
+    # Ensure all server members (excluding bots) are registered in the database
+    for guild in bot.guilds:
+        for member in guild.members:
+            if not member.bot:
+                ensure_user(data, member)
+
     now_ts = int(time.time())
     for uid, udata in list(data.get("users", {}).items()):
         is_active = uid in active_member_vc
@@ -2123,6 +2130,21 @@ async def on_ready():
 
 
     logging.info("Bot ready. All systems operational.")
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """Automatically registers new members in the database as soon as they join."""
+    if member.bot:
+        return
+    try:
+        async with bot.db_write_lock:
+            data = await load_data()
+            ensure_user(data, member)
+            await save_data(data)
+        logging.info(f"[MEMBER JOIN] Registered new member: {member.display_name} ({member.id})")
+    except Exception as e:
+        logging.error(f"Failed to register new member {member.display_name} on join: {e}")
 
 
 # ============================================================
