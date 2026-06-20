@@ -1602,6 +1602,22 @@ async def on_message(message: discord.Message):
 # SECTION 9b: GROUP POMODORO BACKGROUND TASKS
 # ============================================================
 
+async def notify_members_deafen_undeafen(channel: discord.VoiceChannel):
+    """Temporarily server-deafens and undeafens members in the channel to play the notification sound."""
+    async def deafen_undeafen(member: discord.Member):
+        try:
+            if member.voice and member.voice.channel:
+                await member.edit(deafen=True)
+                await asyncio.sleep(1.0)
+                await member.edit(deafen=False)
+        except Exception as e:
+            logging.warning(f"Failed to deafen/undeafen {member.display_name}: {e}")
+
+    tasks = [asyncio.create_task(deafen_undeafen(m)) for m in channel.members if not m.bot]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def pomodoro_status_loop():
     """Updates the pomodoro voice channel status every 30 seconds."""
     await bot.wait_until_ready()
@@ -1639,7 +1655,10 @@ async def pomodoro_status_loop():
             # Send alert on phase transition
             if last_phase is not None and last_phase != phase:
                 await send_pomodoro_alert(channel, phase)
+                # Deaf/undeaf notification sound for group pomodoro channel
+                asyncio.create_task(notify_members_deafen_undeafen(channel))
             last_phase = phase
+
 
         except Exception as e:
             logging.error(f"Pomodoro status loop error: {e}")
@@ -1722,6 +1741,17 @@ async def individual_pomodoro_loop(user_id: int):
             pomo["current_phase"] = "break"
             pomo["phase_end"] = int(time.time()) + break_secs
             pomo["total_study_seconds"] = pomo.get("total_study_seconds", 0) + study_secs
+
+            # Disconnect user from study voice channels on break transition
+            try:
+                for guild in bot.guilds:
+                    member = guild.get_member(user_id)
+                    if member and member.voice and member.voice.channel:
+                        if member.voice.channel.id != POMODORO_CHANNEL_ID:
+                            await member.move_to(None)
+                            logging.info(f"[POMODORO] Disconnected {member.display_name} from voice for break.")
+            except Exception as e:
+                logging.warning(f"Failed to disconnect user {user_id} on individual break transition: {e}")
 
             # Notify break start
             try:
