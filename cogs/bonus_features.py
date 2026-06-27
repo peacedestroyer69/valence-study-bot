@@ -22,6 +22,7 @@ import random
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore
+from bot import get_ist_date, get_ist_now, IST_TZ
 
 # DATA_FILE removed, cogs use self.bot database methods
 
@@ -50,26 +51,62 @@ DEFAULT_COLOR = 0x2B2D31
 # MOTIVATIONAL QUOTES (curated, not generic)
 # ============================================================
 MOTIVATIONAL_QUOTES = [
-    ("The grind never lies. 📚", "— YPT Philosophy"),
-    ("Every hour compounds. Keep going.", "— Compound Effect"),
-    ("Discipline > Motivation. Always.", "— Jocko Willink"),
-    ("Your future self is watching. Don't disappoint.", "— Unknown"),
-    ("JEE doesn't care about excuses. Neither should you.", "— Reality"),
-    ("One more hour. That's the gap between you and them.", "— Compete"),
-    ("Consistency beats intensity every single time.", "— James Clear"),
-    ("The pain of discipline is lighter than the pain of regret.", "— Jim Rohn"),
-    ("Study like your rank depends on it. Because it does.", "— Facts"),
-    ("While you're sleeping, someone else is studying.", "— Truth"),
-    ("Don't wish it were easier. Wish you were better.", "— Jim Rohn"),
-    ("The only way to do great work is to love what you do.", "— Steve Jobs"),
-    ("Success is the sum of small efforts repeated daily.", "— Robert Collier"),
-    ("Hard work beats talent when talent doesn't work hard.", "— Tim Notke"),
-    ("You don't have to be great to start, but you have to start to be great.", "— Zig Ziglar"),
-    ("The expert in anything was once a beginner.", "— Helen Hayes"),
-    ("It's not about having time. It's about making time.", "— Grind"),
-    ("Your comfort zone is a beautiful place, but nothing grows there.", "— Growth"),
-    ("Fall seven times, stand up eight.", "— Japanese Proverb"),
-    ("You are one study session away from a breakthrough.", "— Keep Going"),
+    # --- Core grind mindset ---
+    ("The grind never lies.", "YPT Philosophy"),
+    ("Every hour compounds. Keep going.", "Compound Effect"),
+    ("Discipline > Motivation. Always.", "Jocko Willink"),
+    ("Your future self is watching. Don't disappoint.", "Unknown"),
+    ("JEE doesn't care about excuses. Neither should you.", "Reality"),
+    ("One more hour. That's the gap between you and them.", "Compete"),
+    ("Consistency beats intensity every single time.", "James Clear"),
+    ("The pain of discipline is lighter than the pain of regret.", "Jim Rohn"),
+    ("Study like your rank depends on it. Because it does.", "Facts"),
+    ("While you're sleeping, someone else is studying.", "Truth"),
+    # --- Classic quotes ---
+    ("Don't wish it were easier. Wish you were better.", "Jim Rohn"),
+    ("The only way to do great work is to love what you do.", "Steve Jobs"),
+    ("Success is the sum of small efforts repeated daily.", "Robert Collier"),
+    ("Hard work beats talent when talent doesn't work hard.", "Tim Notke"),
+    ("You don't have to be great to start, but you have to start to be great.", "Zig Ziglar"),
+    ("The expert in anything was once a beginner.", "Helen Hayes"),
+    ("It's not about having time. It's about making time.", "Grind"),
+    ("Your comfort zone is a beautiful place, but nothing grows there.", "Growth"),
+    ("Fall seven times, stand up eight.", "Japanese Proverb"),
+    ("You are one study session away from a breakthrough.", "Keep Going"),
+    # --- JEE / competitive exam specific ---
+    ("AIR 1 didn't take days off. Will you?", "Compete"),
+    ("Every NCERT line you skip is a mark lost in JEE.", "Strategy"),
+    ("Toppers don't have more hours in the day. They waste fewer.", "Efficiency"),
+    ("Your rank is decided now, not on exam day.", "JEE Reality"),
+    ("The student who masters basics beats the one who skips to advanced.", "Foundation"),
+    ("PYQs don't lie. Solve them daily.", "JEE Prep"),
+    ("Revision is not optional. It's the whole game.", "Memory"),
+    ("One PYQ solved = one less surprise on exam day.", "Prep"),
+    ("You're not tired. You're just not interested enough. Find a reason.", "Mindset"),
+    ("The gap between AIR 1 and AIR 1000 is mostly consistency.", "JEE Stats"),
+    # --- Physics/Math/Chem motivation ---
+    ("Physics is not hard. You're just not spending enough time with it.", "Physics"),
+    ("Mathematics is the language of the universe. Learn it.", "Gauss"),
+    ("Chemistry rewards patience. Don't rush the reaction.", "Chemistry"),
+    ("Every formula you memorize is a weapon you carry into battle.", "Exam Day"),
+    ("Calculus felt impossible once. Now it's your weapon. Keep going.", "Progress"),
+    # --- Mental strength ---
+    ("Champions train when they don't feel like it. That's what makes them champions.", "Champions"),
+    ("Your brain is a muscle. Study is the gym. Skip sessions, lose strength.", "Neuroscience"),
+    ("Pressure makes diamonds. You're being compressed right now.", "Resilience"),
+    ("The nights you study while others sleep are the nights your rank improves.", "Night Grind"),
+    ("You will not regret studying hard. You WILL regret not studying hard.", "No Regrets"),
+    ("Don't count the hours. Make the hours count.", "Quality"),
+    ("Motivation gets you started. Habit keeps you going.", "Systems"),
+    ("The best time to start was yesterday. The second best time is right now.", "Now"),
+    ("Small progress is still progress. Show up every day.", "Incremental Growth"),
+    ("Doubt kills more dreams than failure ever will.", "Mindset"),
+    # --- Competitor framing ---
+    ("Someone is studying right now who wants your rank. Fight for it.", "Competition"),
+    ("The student who sits down to study when they don't want to always wins.", "Discipline"),
+    ("Your competition is not resting. Are you?", "Urgency"),
+    ("Every hour of studying today is an investment that pays on exam day.", "Investment"),
+    ("Success is not given. It is taken. So take it.", "Ownership"),
 ]
 
 # ============================================================
@@ -104,17 +141,56 @@ class BonusFeaturesCog(commands.Cog):
     # ==================================================================
     @app_commands.command(name="motivate", description="Get a random motivational study quote.")
     async def motivate_command(self, interaction: discord.Interaction):
-        """Sends a beautiful motivational quote embed."""
-        quote, author = random.choice(MOTIVATIONAL_QUOTES)
+        """Sends a Gemini-personalized motivational quote embed, with a rich static fallback bank."""
+        await interaction.response.defer()
+
+        # Try to get a Gemini-generated quote first
+        ai_quote = None
+        ai_author = None
+        try:
+            from cogs.gemini_brain import _call_gemini
+            uid = str(interaction.user.id)
+            data = await self.bot.load_data()
+            udata = data.get("users", {}).get(uid, {})
+            hours_today = round(udata.get("total_seconds_today", 0) / 3600, 1)
+            hours_alltime = round(udata.get("total_seconds_alltime", 0) / 3600, 1)
+            streak = udata.get("current_streak_days", 0)
+            username = interaction.user.display_name
+
+            prompt = (
+                f"Generate a single powerful, original motivational quote for a JEE aspirant named {username}.\n"
+                f"Context: {username} has studied {hours_today}h today, {hours_alltime}h all-time, "
+                f"and has a {streak}-day study streak.\n"
+                f"Rules:\n"
+                f"- ONE quote only, max 2 sentences\n"
+                f"- Brutally honest, JEE-specific, call out their specific stats\n"
+                f"- Do NOT use generic cliches like 'believe in yourself' or 'you can do it'\n"
+                f"- Make it hit hard, specific, urgent\n"
+                f"- Format: just the quote text, no quotation marks, no attribution"
+            )
+            result = await _call_gemini(prompt, fallback="", timeout=8.0,
+                                        model_preference=["gemini-2.0-flash-lite", "gemini-2.0-flash"])
+            if result and len(result) > 20:
+                ai_quote = result.strip()
+                ai_author = f"Gemini AI for {username}"
+        except Exception as e:
+            logging.warning(f"[MOTIVATE] Gemini quote generation failed: {e}")
+
+        # Use AI quote or fall back to curated static bank
+        if ai_quote:
+            quote = ai_quote
+            author = ai_author
+        else:
+            quote, author = random.choice(MOTIVATIONAL_QUOTES)
 
         embed = discord.Embed(
-            title="💭 Study Motivation",
-            description=f"*\"{quote}\"*",
+            title="Study Motivation",
+            description=f'"{quote}"',
             color=random.choice([0x5865F2, 0x57F287, 0xFEE75C, 0xEB459E, 0xED4245]),
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
-        embed.set_footer(text=author)
-        await interaction.response.send_message(embed=embed)
+        embed.set_footer(text=f"— {author}")
+        await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # COMMAND: /serverstats
@@ -122,6 +198,7 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.command(name="serverstats", description="View total server study statistics.")
     async def serverstats_command(self, interaction: discord.Interaction):
         """Shows aggregate server study stats."""
+        await interaction.response.defer(ephemeral=False)
         data = await self.bot.load_data()
         users = data.get("users", {})
 
@@ -172,7 +249,7 @@ class BonusFeaturesCog(commands.Cog):
         embed = discord.Embed(
             title="📊 Study Boi — Server Stats",
             color=0x5865F2,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.add_field(
             name="📚 Total Study Time",
@@ -198,7 +275,7 @@ class BonusFeaturesCog(commands.Cog):
             inline=True,
         )
         embed.set_footer(text="The grind never lies. 📈")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # COMMAND: /history
@@ -207,13 +284,14 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.describe(user="The user to check (defaults to you)")
     async def history_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Shows the last 10 days of study activity."""
+        await interaction.response.defer(ephemeral=False)
         target = user or interaction.user
         data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
-            await interaction.response.send_message(
-                f"📭 No data for **{target.display_name}**.", ephemeral=True
+            await interaction.followup.send(
+                f"📭 No data for **{target.display_name}**."
             )
             return
 
@@ -258,10 +336,10 @@ class BonusFeaturesCog(commands.Cog):
             title=f"📖 {target.display_name}'s Recent Study History",
             description="\n".join(lines),
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.set_footer(text="Last 10 days of activity")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # COMMAND: /countdown
@@ -274,6 +352,7 @@ class BonusFeaturesCog(commands.Cog):
         exam_date: str | None = None,
     ):
         """Sets or displays an exam countdown."""
+        await interaction.response.defer(ephemeral=False)
         data = await self.bot.load_data()
 
         if exam_name and exam_date:
@@ -281,14 +360,14 @@ class BonusFeaturesCog(commands.Cog):
             try:
                 target_date = datetime.date.fromisoformat(exam_date)
             except ValueError:
-                await interaction.response.send_message(
-                    "❌ Invalid date format. Use `YYYY-MM-DD` (e.g., `2025-01-22`).", ephemeral=True
+                await interaction.followup.send(
+                    "❌ Invalid date format. Use `YYYY-MM-DD` (e.g., `2025-01-22`)."
                 )
                 return
 
-            days_left = (target_date - datetime.date.today()).days
+            days_left = (target_date - get_ist_date()).days
             if days_left < 0:
-                await interaction.response.send_message("❌ That date is in the past!", ephemeral=True)
+                await interaction.followup.send("❌ That date is in the past!")
                 return
 
             # Save to meta
@@ -307,16 +386,15 @@ class BonusFeaturesCog(commands.Cog):
                     f"{'🔴 CRUNCH TIME!' if days_left <= 30 else '📚 Keep grinding!'}"
                 ),
                 color=0xFF0000 if days_left <= 30 else 0x57F287,
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=get_ist_now(),
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
         else:
             # Show existing countdowns
             countdowns = data.get("countdowns", {})
             if not countdowns:
-                await interaction.response.send_message(
-                    "📭 No countdowns set. Use `/countdown exam_name:\"JEE\" exam_date:\"2025-01-22\"` to set one.",
-                    ephemeral=True,
+                await interaction.followup.send(
+                    "📭 No countdowns set. Use `/countdown exam_name:\"JEE\" exam_date:\"2025-01-22\"` to set one."
                 )
                 return
 
@@ -324,7 +402,7 @@ class BonusFeaturesCog(commands.Cog):
             for name, date_str in sorted(countdowns.items(), key=lambda x: x[1]):
                 try:
                     target_date = datetime.date.fromisoformat(date_str)
-                    days_left = (target_date - datetime.date.today()).days
+                    days_left = (target_date - get_ist_date()).days
                     if days_left < 0:
                         lines.append(f"~~{name}~~ — **PAST** ({target_date.strftime('%b %d')})")
                     elif days_left <= 7:
@@ -340,9 +418,9 @@ class BonusFeaturesCog(commands.Cog):
                 title="⏳ Exam Countdowns",
                 description="\n".join(lines),
                 color=0x5865F2,
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=get_ist_now(),
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # TASK: WEEKLY DUEL (Every Sunday 9 PM IST)
@@ -350,77 +428,85 @@ class BonusFeaturesCog(commands.Cog):
     @tasks.loop(minutes=10)
     async def weekly_duel_check(self):
         """Every Sunday at 9 PM IST, announces who won the week."""
-        now_utc = datetime.datetime.now(datetime.UTC)
-        ist_offset = datetime.timedelta(hours=5, minutes=30)
-        now_ist = now_utc + ist_offset
-
-        # Sunday = 6, 9 PM, first 10 minutes
-        if now_ist.weekday() != 6 or now_ist.hour != 21 or now_ist.minute >= 10:
-            return
-
-        # Prevent double fire
-        flag = f"_duel_{now_ist.date().isoformat()}"
-        if getattr(self, flag, False):
-            return
-        setattr(self, flag, True)
-
-        data = await self.bot.load_data()
-        users = data.get("users", {})
-
-        # Sort users by weekly hours
-        weekly_hours_list = []
-        for u_id, u_data in users.items():
-            hours = u_data.get("total_seconds_weekly", 0) / 3600
-            name = u_data.get("username", "Unknown")
-            weekly_hours_list.append((u_id, name, hours))
-        
-        weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
-
-        if len(weekly_hours_list) < 2:
-            return # Need at least two users for a duel!
-
-        winner_id, winner_name, winner_hours = weekly_hours_list[0]
-        loser_id, loser_name, loser_hours = weekly_hours_list[1]
-
-        channel = self.bot.get_channel(CELEBRATION_CHANNEL_ID)
-        if not channel:
-            return
-
-        if winner_hours == loser_hours:
-            # TIE
-            embed = discord.Embed(
-                title="⚔️ WEEKLY DUEL — IT'S A TIE!",
-                description=(
-                    f"Both warriors studied **{winner_hours:.1f} hours** this week!\n\n"
-                    f"🤝 **{winner_name}**: {winner_hours:.1f}h\n"
-                    f"🤝 **{loser_name}**: {loser_hours:.1f}h\n\n"
-                    f"*Neither one backed down. Respect.*"
-                ),
-                color=0xFEE75C,
-                timestamp=datetime.datetime.now(datetime.UTC),
-            )
-        else:
-            diff = winner_hours - loser_hours
-            embed = discord.Embed(
-                title="⚔️ WEEKLY DUEL — WE HAVE A WINNER!",
-                description=(
-                    f"# 🏆 {winner_name} WINS!\n\n"
-                    f"🥇 **{winner_name}**: **{winner_hours:.1f}h**\n"
-                    f"🥈 **{loser_name}**: **{loser_hours:.1f}h**\n\n"
-                    f"💀 Gap: **{diff:.1f} hours**\n\n"
-                    f"*{loser_name}, you got outworked. Step it up next week.*"
-                ),
-                color=0x57F287,
-                timestamp=datetime.datetime.now(datetime.UTC),
-            )
-
-        embed.set_footer(text="Weekly duel resets Monday. The grind continues. ⚔️")
-
         try:
-            await channel.send(embed=embed)
-            logging.info(f"[DUEL] Weekly duel announced: {winner_name or 'TIE'}")
+            now_ist = get_ist_now()
+
+            # Sunday = 6, 9 PM, first 10 minutes
+            if now_ist.weekday() != 6 or now_ist.hour != 21 or now_ist.minute >= 10:
+                return
+
+            data = await self.bot.load_data()
+            loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+            today_str = now_ist.date().isoformat()
+            if loop_state.get("last_weekly_duel") == today_str:
+                return
+
+            # Sort users by weekly hours
+            users = data.get("users", {})
+            weekly_hours_list = []
+            for u_id, u_data in users.items():
+                hours = u_data.get("total_seconds_weekly", 0) / 3600
+                name = u_data.get("username", "Unknown")
+                weekly_hours_list.append((u_id, name, hours))
+            
+            weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
+
+            if len(weekly_hours_list) < 2:
+                return # Need at least two users for a duel!
+
+            winner_id, winner_name, winner_hours = weekly_hours_list[0]
+            loser_id, loser_name, loser_hours = weekly_hours_list[1]
+
+            if winner_hours == 0 and loser_hours == 0:
+                logging.info("[DUEL] Skipping weekly duel announcement: both users have 0 hours.")
+                return
+
+            # Mark as done in DB
+            loop_state["last_weekly_duel"] = today_str
+            async with self.bot.db_write_lock:
+                await self.bot.save_data(data)
+
+            channel = await self.bot.get_or_fetch_channel(CELEBRATION_CHANNEL_ID)
+            if not channel:
+                return
+
+            if winner_hours == loser_hours:
+                # TIE
+                embed = discord.Embed(
+                    title="⚔️ WEEKLY DUEL — IT'S A TIE!",
+                    description=(
+                        f"Both warriors studied **{winner_hours:.1f} hours** this week!\n\n"
+                        f"🤝 **{winner_name}**: {winner_hours:.1f}h\n"
+                        f"🤝 **{loser_name}**: {loser_hours:.1f}h\n\n"
+                        f"*Neither one backed down. Respect.*"
+                    ),
+                    color=0xFEE75C,
+                    timestamp=get_ist_now(),
+                )
+            else:
+                diff = winner_hours - loser_hours
+                embed = discord.Embed(
+                    title="⚔️ WEEKLY DUEL — WE HAVE A WINNER!",
+                    description=(
+                        f"# 🏆 {winner_name} WINS!\n\n"
+                        f"🥇 **{winner_name}**: **{winner_hours:.1f}h**\n"
+                        f"🥈 **{loser_name}**: **{loser_hours:.1f}h**\n\n"
+                        f"💀 Gap: **{diff:.1f} hours**\n\n"
+                        f"*{loser_name}, you got outworked. Step it up next week.*"
+                    ),
+                    color=0x57F287,
+                    timestamp=get_ist_now(),
+                )
+
+            embed.set_footer(text="Weekly duel resets Monday. The grind continues. ⚔️")
+
+            try:
+                await channel.send(embed=embed)
+                logging.info(f"[DUEL] Weekly duel announced: {winner_name or 'TIE'}")
+            except Exception as e:
+                logging.error(f"[DUEL] Failed to send: {e}")
         except Exception as e:
-            logging.error(f"[DUEL] Failed to send: {e}")
+            logging.error(f"[DUEL] Error in weekly_duel_check loop: {e}", exc_info=True)
 
     @weekly_duel_check.before_loop
     async def before_duel(self):
@@ -433,51 +519,64 @@ class BonusFeaturesCog(commands.Cog):
     async def break_reminder_check(self):
         """If someone has been in a study voice channel for 2+ hours continuously,
         sends them a gentle break reminder DM (once per session)."""
-        data = await self.bot.load_data()
-        users = data.get("users", {})
-        now_ts = int(time.time())
+        try:
+            data = await self.bot.load_data()
+            users = data.get("users", {})
+            now_ts = int(time.time())
 
-        for uid_str in list(users.keys()):
-            udata = users.get(uid_str, {})
-            start_ts = udata.get("session_start_timestamp")
-            if start_ts is None:
-                continue
-
-            elapsed = now_ts - start_ts
-            # Only fire at 2h mark (7200-7500s window to avoid repeat)
-            if 7200 <= elapsed < 7500:
-                flag = f"_break_reminder_{uid_str}_{start_ts}"
-                if getattr(self, flag, False):
+            for uid_str in list(users.keys()):
+                udata = users.get(uid_str, {})
+                start_ts = udata.get("session_start_timestamp")
+                if start_ts is None:
                     continue
-                setattr(self, flag, True)
 
-                for guild in self.bot.guilds:
-                    member = guild.get_member(int(uid_str))
-                    if not member:
-                        try:
-                            member = await guild.fetch_member(int(uid_str))
-                        except Exception:
-                            member = None
-                    if member:
-                        try:
-                            embed = discord.Embed(
-                                title="☕ 2-Hour Break Reminder",
-                                description=(
-                                    f"You've been studying for **{elapsed // 3600}h {(elapsed % 3600) // 60}m** straight!\n\n"
-                                    f"🧠 Your brain needs a 10-minute break to consolidate what you've learned.\n"
-                                    f"💧 Drink water. Stretch. Look away from the screen.\n\n"
-                                    f"*Then come back and keep destroying it.* 💪"
-                                ),
-                                color=0x57F287,
-                                timestamp=datetime.datetime.now(datetime.UTC),
-                            )
-                            await member.send(embed=embed)
-                            logging.info(f"[BREAK] Sent 2h reminder to {udata.get('username', uid_str)}")
-                        except discord.Forbidden:
-                            pass
-                        except Exception as e:
-                            logging.error(f"[BREAK] Error for {uid_str}: {e}")
-                        break
+                elapsed = now_ts - start_ts
+                # Only fire at 2h mark (7200-7500s window to avoid repeat)
+                if 7200 <= elapsed < 7500:
+                    flag = f"_break_reminder_{uid_str}_{start_ts}"
+                    if getattr(self, flag, False):
+                        continue
+                    setattr(self, flag, True)
+
+                    for guild in self.bot.guilds:
+                        member = guild.get_member(int(uid_str))
+                        if not member:
+                            try:
+                                member = await guild.fetch_member(int(uid_str))
+                            except Exception:
+                                member = None
+                        if member:
+                            # Verify member is currently connected to a study voice channel
+                            from bot import DOUBT_CHANNELS
+                            in_study_channel = False
+                            if member.voice and member.voice.channel:
+                                channel_id = member.voice.channel.id
+                                if channel_id in STUDY_VOICE_CHANNELS or channel_id in DOUBT_CHANNELS:
+                                    in_study_channel = True
+                            
+                            if not in_study_channel:
+                                continue
+                            try:
+                                embed = discord.Embed(
+                                    title="☕ 2-Hour Break Reminder",
+                                    description=(
+                                        f"You've been studying for **{elapsed // 3600}h {(elapsed % 3600) // 60}m** straight!\n\n"
+                                        f"🧠 Your brain needs a 10-minute break to consolidate what you've learned.\n"
+                                        f"💧 Drink water. Stretch. Look away from the screen.\n\n"
+                                        f"*Then come back and keep destroying it.* 💪"
+                                    ),
+                                    color=0x57F287,
+                                    timestamp=get_ist_now(),
+                                )
+                                await member.send(embed=embed)
+                                logging.info(f"[BREAK] Sent 2h reminder to {udata.get('username', uid_str)}")
+                            except discord.Forbidden:
+                                pass
+                            except Exception as e:
+                                logging.error(f"[BREAK] Error for {uid_str}: {e}")
+                            break
+        except Exception as e:
+            logging.error(f"[BREAK] Error in break_reminder_check loop: {e}", exc_info=True)
 
     @break_reminder_check.before_loop
     async def before_break(self):
@@ -489,46 +588,49 @@ class BonusFeaturesCog(commands.Cog):
     @tasks.loop(minutes=15)
     async def touch_grass_check(self):
         """If someone studied 8+ hours today, sends a 'touch grass' message."""
-        data = await self.bot.load_data()
-        users = data.get("users", {})
-        today_str = datetime.date.today().isoformat()
+        try:
+            data = await self.bot.load_data()
+            users = data.get("users", {})
+            today_str = get_ist_date()
 
-        for uid_str in list(users.keys()):
-            udata = users.get(uid_str, {})
-            today_secs = udata.get("daily_history", {}).get(today_str, 0)
-            today_hours = today_secs / 3600
+            for uid_str in list(users.keys()):
+                udata = users.get(uid_str, {})
+                today_secs = udata.get("daily_history", {}).get(today_str, 0)
+                today_hours = today_secs / 3600
 
-            if today_hours < 8:
-                continue
+                if today_hours < 8:
+                    continue
 
-            # Only send once per day per user
-            last_sent = self._touch_grass_sent_today.get(uid_str)
-            if last_sent == today_str:
-                continue
-            self._touch_grass_sent_today[uid_str] = today_str
+                # Only send once per day per user
+                last_sent = self._touch_grass_sent_today.get(uid_str)
+                if last_sent == today_str:
+                    continue
+                self._touch_grass_sent_today[uid_str] = today_str
 
-            for guild in self.bot.guilds:
-                member = guild.get_member(int(uid_str))
-                if not member:
-                    try:
-                        member = await guild.fetch_member(int(uid_str))
-                    except Exception:
-                        member = None
-                if member:
-                    try:
-                        msg = random.choice(TOUCH_GRASS_MESSAGES).format(hours=today_hours)
-                        embed = discord.Embed(
-                            title="🌿 TOUCH GRASS ALERT",
-                            description=msg,
-                            color=0x57F287,
-                            timestamp=datetime.datetime.now(datetime.UTC),
-                        )
-                        embed.set_footer(text=f"Today's total: {today_hours:.1f}h | You're a machine 🤖")
-                        await member.send(embed=embed)
-                        logging.info(f"[TOUCH GRASS] Sent to {udata.get('username', uid_str)} ({today_hours:.1f}h)")
-                    except Exception as e:
-                        logging.error(f"[TOUCH GRASS] Error for {uid_str}: {e}")
-                    break
+                for guild in self.bot.guilds:
+                    member = guild.get_member(int(uid_str))
+                    if not member:
+                        try:
+                            member = await guild.fetch_member(int(uid_str))
+                        except Exception:
+                            member = None
+                    if member:
+                        try:
+                            msg = random.choice(TOUCH_GRASS_MESSAGES).format(hours=today_hours)
+                            embed = discord.Embed(
+                                title="🌿 TOUCH GRASS ALERT",
+                                description=msg,
+                                color=0x57F287,
+                                timestamp=get_ist_now(),
+                            )
+                            embed.set_footer(text=f"Today's total: {today_hours:.1f}h | You're a machine 🤖")
+                            await member.send(embed=embed)
+                            logging.info(f"[TOUCH GRASS] Sent to {udata.get('username', uid_str)} ({today_hours:.1f}h)")
+                        except Exception as e:
+                            logging.error(f"[TOUCH GRASS] Error for {uid_str}: {e}")
+                        break
+        except Exception as e:
+            logging.error(f"[TOUCH GRASS] Error in touch_grass_check loop: {e}", exc_info=True)
 
     @touch_grass_check.before_loop
     async def before_touch_grass(self):
@@ -540,6 +642,7 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.command(name="whowon", description="See who's winning the weekly duel right now!")
     async def whowon_command(self, interaction: discord.Interaction):
         """Shows the live weekly duel standings."""
+        await interaction.response.defer(ephemeral=False)
         data = await self.bot.load_data()
         users = data.get("users", {})
 
@@ -553,7 +656,7 @@ class BonusFeaturesCog(commands.Cog):
         weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
 
         if len(weekly_hours_list) < 2:
-            await interaction.response.send_message("📭 Need at least two players with study data to have a duel!", ephemeral=True)
+            await interaction.followup.send("📭 Need at least two players with study data to have a duel!")
             return
 
         winner_id, winner_name, winner_hours = weekly_hours_list[0]
@@ -580,7 +683,7 @@ class BonusFeaturesCog(commands.Cog):
             color = 0xFEE75C
 
         # Days left in the week
-        now = datetime.date.today()
+        now = get_ist_date()
         days_left = (7 - now.weekday()) % 7
         if days_left == 0:
             days_left = 7
@@ -595,7 +698,7 @@ class BonusFeaturesCog(commands.Cog):
                 f"📅 **{days_left} day(s)** left this week"
             ),
             color=color,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.set_footer(text="Resets every Monday. May the grind be with you. ⚔️")
         await interaction.response.send_message(embed=embed)
@@ -607,12 +710,13 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.describe(user="Who's flexing? (defaults to you)")
     async def flex_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Dramatic flex of your best stats."""
+        await interaction.response.defer(ephemeral=False)
         target = user or interaction.user
         data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
-            await interaction.response.send_message("📭 No data to flex. Study first!", ephemeral=True)
+            await interaction.followup.send("📭 No data to flex. Study first!")
             return
 
         udata = data["users"][uid]
@@ -649,7 +753,7 @@ class BonusFeaturesCog(commands.Cog):
             title=f"💪 {target.display_name}'s FLEX",
             description=f"## {tier}\n*{tier_msg}*",
             color=accent,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.add_field(name="📚 Total Study", value=f"**{total_hours:.1f}h**", inline=True)
         embed.add_field(name="📅 This Week", value=f"**{weekly_hours:.1f}h**", inline=True)
@@ -662,7 +766,7 @@ class BonusFeaturesCog(commands.Cog):
         if target.display_avatar:
             embed.set_thumbnail(url=target.display_avatar.url)
         embed.set_footer(text="Numbers don't lie. The grind speaks for itself. 💪")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # COMMAND: /studytip — Science-backed study techniques
@@ -692,7 +796,7 @@ class BonusFeaturesCog(commands.Cog):
             title=f"{title}",
             description=f"{description}\n\n📎 *Source: {source}*",
             color=random.choice([0x5865F2, 0x57F287, 0xFEE75C, 0xEB459E]),
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.set_footer(text="Study smarter, not just harder. 🧠")
         await interaction.response.send_message(embed=embed)
@@ -704,19 +808,20 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.describe(user="Who to predict for (defaults to you)")
     async def predict_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
         """Predicts end-of-week hours based on current pace."""
+        await interaction.response.defer(ephemeral=False)
         target = user or interaction.user
         data = await self.bot.load_data()
         uid = str(target.id)
 
         if uid not in data["users"]:
-            await interaction.response.send_message("📭 No data yet!", ephemeral=True)
+            await interaction.followup.send("📭 No data yet!")
             return
 
         udata = data["users"][uid]
         weekly_secs = udata.get("total_seconds_weekly", 0)
         weekly_hours = weekly_secs / 3600
 
-        now = datetime.date.today()
+        now = get_ist_date()
         day_of_week = now.weekday()  # 0=Mon
         days_passed = day_of_week + 1  # How many days since Monday
         days_left = 7 - days_passed
@@ -760,10 +865,10 @@ class BonusFeaturesCog(commands.Cog):
                 f"{verdict}"
             ),
             color=accent,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=get_ist_now(),
         )
         embed.set_footer(text=f"{days_left} day(s) left to change your fate. ⏳")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):
