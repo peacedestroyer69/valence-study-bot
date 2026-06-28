@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: ypt-study-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: LEADERBOARD_CHANNEL_ID
+        sync: false
+      - key: LOG_CHANNEL_ID
+        sync: false
+      - key: CELEBRATION_CHANNEL_ID
+        sync: false
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: PUZZLE_CHANNEL_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_1
+        sync: false
+      - key: GEMINI_API_KEY_2
+        sync: false
+      - key: GEMINI_API_KEY_3
+        sync: false
+      - key: GEMINI_API_KEY_4
+        sync: false
+      - key: GEMINI_API_KEY_5
+        sync: false
+      - key: GEMINI_API_KEY_6
+        sync: false
+
+  - type: web
+    name: valence-task-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python task_bot.py
+    envVars:
+      - key: TASK_BOT_TOKEN
+        sync: false
+      - key: LEADERBOARD_CHANNEL_ID
+        sync: false
+      - key: LOG_CHANNEL_ID
+        sync: false
+      - key: CELEBRATION_CHANNEL_ID
+        sync: false
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.10.12

@@ -1,0 +1,48 @@
+# Secrets - NEVER push this
+.env
+
+# Runtime data
+study_data.json
+study_data.json.tmp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE files
+.vscode/
+.idea/
+
+# Scratch folder - contains test files and secrets
+scratch/
+
+# Temporary/debug scripts
+*.vbs
+patch*.py
+cleanup*.py
+fix_bot.py
+test_*.py
+test_*.txt
+dummy.txt
+run_del.bat
+start_bot.bat
+clean_bot.vbs
+delete_locks.vbs
+
+# Chat/log artifacts
+chat_history.jsonl
+chrome_incident_log.md
+
+# Gitlab companion (not part of bot)
+gitlab_claude_companion.user.js
+gitlab_context_packer.py
+
+# Empty placeholder files
+chess_bot.py
+
+# Temp DB files
+task_db_temp.py
+
+# Agents / AI generated metadata
+.agents/
