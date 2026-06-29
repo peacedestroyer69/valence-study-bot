@@ -63,7 +63,7 @@ class JEEPrepCog(commands.Cog):
         gemini_key = os.getenv("GEMINI_API_KEY", "")
         if gemini_key:
             genai.configure(api_key=gemini_key)
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
         else:
             self.model = None
 
@@ -274,10 +274,10 @@ class JEEPrepCog(commands.Cog):
         data = await self.bot.load_data()
         users = data.get("users", {})
 
-        v_prog = users.get(v_id, {}).get("syllabus_progress", {})
-        u_prog = users.get(u_id, {}).get("syllabus_progress", {})
-        v_name = users.get(v_id, {}).get("username", "Valence")
-        u_name = users.get(u_id, {}).get("username", "Ujjwal")
+        v_prog = (users.get(v_id, {}) or {}).get("syllabus_progress") or {}
+        u_prog = (users.get(u_id, {}) or {}).get("syllabus_progress") or {}
+        v_name = (users.get(v_id, {}) or {}).get("username", "Valence")
+        u_name = (users.get(u_id, {}) or {}).get("username", "Ujjwal")
 
         embed = discord.Embed(
             title="🏁 JEE Syllabus Progress Grid",
@@ -330,25 +330,28 @@ class JEEPrepCog(commands.Cog):
     # ------------------------------------------------------------------
     @tasks.loop(minutes=30)
     async def weekly_audit_loop(self):
-        """Checks if it is Sunday 10 PM IST to run AI coaching audits."""
+        """Weekly audit loop, runs once a week after Sunday 10 PM IST."""
         await self.bot.wait_until_ready()
         try:
             now_ist = get_ist_now()
-            # Sunday 10 PM IST (Weekday 6 represents Sunday, 22 represents 10 PM)
-            if now_ist.weekday() == 6 and now_ist.hour == 22:
-                today_str = now_ist.date().isoformat()
-                
+            
+            # Find the most recent Sunday
+            days_since_sunday = (now_ist.weekday() + 1) % 7
+            prev_sunday_date = now_ist.date() - datetime.timedelta(days=days_since_sunday)
+            prev_sunday_10pm = datetime.datetime.combine(prev_sunday_date, datetime.time(22, 0), tzinfo=IST_TZ)
+            
+            if now_ist >= prev_sunday_10pm:
                 data = await self.bot.load_data()
                 meta = data.setdefault("meta", {})
                 last_audit = meta.get("last_weekly_ai_audit")
-
-                if last_audit != today_str:
-                    logging.info("[AI AUDIT] Sunday 10 PM IST reached. Commencing audits...")
+                
+                if last_audit != prev_sunday_date.isoformat():
+                    logging.info(f"[AI AUDIT] Commencing weekly audits for {prev_sunday_date.isoformat()}...")
                     await self._run_weekly_audits(data)
                     
                     async with self.bot.db_write_lock:
                         data = await self.bot.load_data()
-                        data["meta"]["last_weekly_ai_audit"] = today_str
+                        data.setdefault("meta", {})["last_weekly_ai_audit"] = prev_sunday_date.isoformat()
                         await self.bot.save_data(data)
         except Exception as e:
             logging.error(f"[AI AUDIT] Error in loop: {e}", exc_info=True)
@@ -375,10 +378,11 @@ class JEEPrepCog(commands.Cog):
                 streak = udata.get("current_streak_days", 0)
                 
                 # Subject Tag breakdown
-                subjects_str = ", ".join(f"{sub}: {round(sec/3600, 1)}h" for sub, sec in udata.get("subject_hours", {}).items())
+                subj_hours = udata.get("subject_hours") or {}
+                subjects_str = ", ".join(f"{sub}: {round(sec/3600, 1)}h" for sub, sec in subj_hours.items())
                 
                 # PYQs solved
-                pyqs = udata.get("pyq_history", [])
+                pyqs = udata.get("pyq_history") or []
                 weekly_pyq_count = 0
                 weekly_pyq_correct = 0
                 

@@ -313,24 +313,22 @@ class DisciplineCog(commands.Cog):
     # ==================================================================
     @tasks.loop(minutes=10)
     async def daily_discipline_check(self):
-        """Runs every 10 minutes. Fires punishment logic at midnight IST."""
+        """Runs every 10 minutes. Fires punishment logic once per day after midnight IST."""
         try:
             now_ist = get_ist_now()
             today_str = now_ist.date().isoformat()
 
-            # Only trigger in the 00:00-00:09 window
-            if now_ist.hour == 0 and now_ist.minute < 10:
-                async with self.bot.db_write_lock:
-                    data = await self.bot.load_data()
-                    loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
-                    if loop_state.get("discipline_check_date") == today_str:
-                        return
+            async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                if loop_state.get("discipline_check_date") == today_str:
+                    return
 
-                    logging.info("[DISCIPLINE] Running daily midnight discipline check...")
-                    loop_state["discipline_check_date"] = today_str
-                    await self.bot.save_data(data)
+                logging.info("[DISCIPLINE] Running daily midnight discipline check...")
+                loop_state["discipline_check_date"] = today_str
+                await self.bot.save_data(data)
 
-                await self.execute_punishments()
+            await self.execute_punishments()
         except Exception as e:
             logging.error(f"[DISCIPLINE] Error in daily_discipline_check: {e}", exc_info=True)
 
@@ -565,8 +563,8 @@ class DisciplineCog(commands.Cog):
         try:
             now_ist = get_ist_now()
 
-            # Only fire in the first 5 minutes of the hour (align to :00)
-            if now_ist.minute >= 5:
+            # Allow a 15-minute window for robustness against brief restarts/downtime
+            if now_ist.minute >= 15:
                 return
 
             hour = now_ist.hour
@@ -685,23 +683,27 @@ class DisciplineCog(commands.Cog):
     # ==================================================================
     @tasks.loop(minutes=5)
     async def study_gap_reminder_loop(self):
-        """Every 5 minutes, but only fires at the half-hour mark (between :30 and :34) between 8 AM and 11 PM IST.
-        Sends motivational/aggressive DMs to users who have dropped off or not started."""
+        """Every 5 minutes. Checks if we should send gap reminders for the current hour (8 AM to 11 PM IST)."""
         try:
             now_ist = get_ist_now()
             hour = now_ist.hour
-
-            # Only run at the half-hour mark (:30 to :34)
-            if not (30 <= now_ist.minute < 35):
-                return
 
             # Only run 8 AM to 11 PM IST (23:00 exclusive end)
             if not (8 <= hour < 23):
                 return
 
-            logging.info(f"[DISCIPLINE] study_gap_reminder_loop firing at {now_ist.strftime('%H:%M')} IST")
+            # Check if we already ran for this hour
+            async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                today_hour_str = f"{now_ist.date().isoformat()}_{hour}"
+                if loop_state.get("last_gap_reminder") == today_hour_str:
+                    return
 
-            data = await self.bot.load_data()
+                loop_state["last_gap_reminder"] = today_hour_str
+                await self.bot.save_data(data)
+
+            logging.info(f"[DISCIPLINE] study_gap_reminder_loop firing at {now_ist.strftime('%H:%M')} IST")
             users = data.get("users", {})
 
             general_channel = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
@@ -890,12 +892,12 @@ class DisciplineCog(commands.Cog):
     # ==================================================================
     @tasks.loop(minutes=10)
     async def daily_absence_callout(self):
-        """At 10 AM IST, mention users in the study text channel who didn't study yesterday."""
+        """Mention users in the study text channel who didn't study yesterday (run once per day, 10 AM IST or later)."""
         try:
             now_ist = get_ist_now()
 
-            # Only trigger at 10:00-10:09 AM IST
-            if now_ist.hour != 10 or now_ist.minute >= 10:
+            # Only trigger at 10 AM IST or later
+            if now_ist.hour < 10:
                 return
 
             async with self.bot.db_write_lock:

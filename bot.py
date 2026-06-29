@@ -686,14 +686,20 @@ async def update_leaderboard_embed(mode: str = "alltime"):
     """Updates or creates the persistent leaderboard message."""
     bot.current_view_mode = mode
     try:
-        async with bot.db_write_lock:
-            data = await load_data()
-            db_changed = False
-            for uid, udata in data.get("users", {}).items():
-                if enforce_user_resets(udata):
-                    db_changed = True
-            if db_changed:
-                await save_data(data)
+        data = await load_data()
+        db_changed = False
+        for uid, udata in data.get("users", {}).items():
+            if enforce_user_resets(udata):
+                db_changed = True
+        if db_changed:
+            async with bot.db_write_lock:
+                data = await load_data()
+                db_changed_lock = False
+                for uid, udata in data.get("users", {}).items():
+                    if enforce_user_resets(udata):
+                        db_changed_lock = True
+                if db_changed_lock:
+                    await save_data(data)
 
         embed = build_leaderboard_embed(data, mode)
         view = LeaderboardView(mode)
@@ -775,15 +781,20 @@ class LeaderboardView(discord.ui.View):
     async def _switch_mode(self, interaction: discord.Interaction, mode: str):
         try:
             self.current_mode = mode
-            async with bot.db_write_lock:
-                data = await load_data()
-                # Run resets in place
-                db_changed = False
-                for uid, udata in data.get("users", {}).items():
-                    if enforce_user_resets(udata):
-                        db_changed = True
-                if db_changed:
-                    await save_data(data)
+            data = await load_data()
+            db_changed = False
+            for uid, udata in data.get("users", {}).items():
+                if enforce_user_resets(udata):
+                    db_changed = True
+            if db_changed:
+                async with bot.db_write_lock:
+                    data = await load_data()
+                    db_changed_lock = False
+                    for uid, udata in data.get("users", {}).items():
+                        if enforce_user_resets(udata):
+                            db_changed_lock = True
+                    if db_changed_lock:
+                        await save_data(data)
                 
             embed = build_leaderboard_embed(data, mode)
             view = LeaderboardView(mode)
@@ -909,7 +920,9 @@ class SubjectTagView(discord.ui.View):
             tag = select.values[0]
             async with bot.db_write_lock:
                 data = await load_data()
-                udata = data["users"].get(self.user_id, {})
+                udata = data["users"].get(self.user_id)
+                if udata is None:
+                    udata = ensure_user(data, interaction.user)
                 # Track subject hours
                 if "subject_hours" not in udata:
                     udata["subject_hours"] = {}
@@ -1294,48 +1307,61 @@ async def check_weekly_reset(data: dict):
             winner_seconds = 0
             winner_name = "Unknown"
             
-            async with bot.db_write_lock:
-                data = await load_data()
-                if "meta" not in data:
-                    data["meta"] = {}
-                meta = data["meta"]
+            data = await load_data()
+            if "meta" not in data:
+                data["meta"] = {}
+            meta = data["meta"]
 
-                # Check Daily Reset
-                last_daily = meta.get("last_daily_reset")
-                if last_daily != today_str:
-                    for uid, udata in data.get("users", {}).items():
-                        enforce_user_resets(udata)
-                    meta["last_daily_reset"] = today_str
-                    changed = True
-                    logging.info(f"Global daily reset performed for {today_str}.")
+            # Read-only check to see if daily or weekly reset is needed
+            last_daily = meta.get("last_daily_reset")
+            need_daily = last_daily != today_str
+            need_weekly = False
+            if today.weekday() == WEEKLY_RESET_DAY:
+                last_weekly = meta.get("last_weekly_reset")
+                if last_weekly != today_str:
+                    need_weekly = True
 
-                # Check Weekly Reset (Monday)
-                if today.weekday() == WEEKLY_RESET_DAY:
-                    last_weekly = meta.get("last_weekly_reset")
-                    if last_weekly != today_str:
-                        # Find this week's winner BEFORE resetting
-                        for uid, udata in data.get("users", {}).items():
-                            if udata.get("last_weekly_reset") == today_str:
-                                weekly = udata.get("last_week_total_seconds", 0)
-                            else:
-                                weekly = udata.get("total_seconds_weekly", 0)
+            if need_daily or need_weekly:
+                async with bot.db_write_lock:
+                    data = await load_data()
+                    if "meta" not in data:
+                        data["meta"] = {}
+                    meta = data["meta"]
 
-                            if weekly > winner_seconds:
-                                winner_seconds = weekly
-                                winner_uid = uid
-                                winner_name = udata.get("username", "Unknown")
-
-                        # Run enforce_user_resets on all users
+                    # Re-check daily reset inside lock
+                    last_daily = meta.get("last_daily_reset")
+                    if last_daily != today_str:
                         for uid, udata in data.get("users", {}).items():
                             enforce_user_resets(udata)
-
-                        meta["last_weekly_reset"] = today_str
+                        meta["last_daily_reset"] = today_str
                         changed = True
-                        do_weekly_announcement = True
-                        logging.info(f"Global weekly reset performed for {today_str}.")
-                
-                if changed:
-                    await save_data(data)
+                        logging.info(f"Global daily reset performed for {today_str}.")
+
+                    # Re-check weekly reset inside lock
+                    if today.weekday() == WEEKLY_RESET_DAY:
+                        last_weekly = meta.get("last_weekly_reset")
+                        if last_weekly != today_str:
+                            for uid, udata in data.get("users", {}).items():
+                                if udata.get("last_weekly_reset") == today_str:
+                                    weekly = udata.get("last_week_total_seconds", 0)
+                                else:
+                                    weekly = udata.get("total_seconds_weekly", 0)
+
+                                if weekly > winner_seconds:
+                                    winner_seconds = weekly
+                                    winner_uid = uid
+                                    winner_name = udata.get("username", "Unknown")
+
+                            for uid, udata in data.get("users", {}).items():
+                                enforce_user_resets(udata)
+
+                            meta["last_weekly_reset"] = today_str
+                            changed = True
+                            do_weekly_announcement = True
+                            logging.info(f"Global weekly reset performed for {today_str}.")
+                    
+                    if changed:
+                        await save_data(data)
 
             # Update leaderboard OUTSIDE the lock to avoid deadlock
             if changed:
@@ -1582,6 +1608,20 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
         if ch_type == "untracked":
             return
 
+        # Track variables for post-lock work
+        _do_pomo_log = False
+        _do_study_log = False
+        _do_doubt_log = False
+        _do_discussion_log = False
+        _is_new_pb = False
+        _study_secs = 0
+        _break_secs = 0
+        _total_time_in_channel = 0
+        _session_seconds = 0
+        _udata_copy = {}
+        _needs_status_update = False
+        _needs_presence_update = False
+
         async with bot.db_write_lock:
             data = await load_data()
             uid = str(member.id)
@@ -1590,110 +1630,107 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             start_ts = udata.get("session_start_timestamp")
             if start_ts is None:
                 log_warning("SESSION END", "left but had no active session", member)
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                return
+                _needs_status_update = True
+            else:
+                session_seconds = int(time.time()) - start_ts
+                _session_seconds = session_seconds
 
-            session_seconds = int(time.time()) - start_ts
-
-            if session_seconds < MIN_SESSION_SECONDS:
-                log_info("SESSION DISCARD", f"{session_seconds}s (below {MIN_SESSION_SECONDS}s minimum)", member)
-                udata["session_start_timestamp"] = None
-                udata["session_channel_id"] = None
-                await save_data(data)
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
-                return
-
-            real_start_ts = start_ts  # Save BEFORE clearing
-            udata["session_start_timestamp"] = None
-            udata["session_channel_id"] = None
-
-            # Track variables for post-lock work
-            _do_pomo_log = False
-            _do_study_log = False
-            _do_doubt_log = False
-            _do_discussion_log = False
-            _is_new_pb = False
-            _study_secs = 0
-            _break_secs = 0
-            _total_time_in_channel = 0
-
-            if channel.id == POMODORO_CHANNEL_ID:
-                # --- GROUP POMODORO: calculate study time excluding breaks ---
-                study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
-
-                if study_secs >= MIN_SESSION_SECONDS:
-                    udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
-                    udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
-                    udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
-                    udata["session_count"] = udata.get("session_count", 0) + 1
-
-                    if study_secs > udata.get("longest_session_seconds", 0):
-                        udata["longest_session_seconds"] = study_secs
-                    if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                        udata["best_day_seconds"] = udata["total_seconds_today"]
-
-                    # Record daily history for heatmap
-                    today_str = get_ist_date().isoformat()
-                    if "daily_history" not in udata:
-                        udata["daily_history"] = {}
-                    udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
-
-                    update_streak(udata)
+                if session_seconds < MIN_SESSION_SECONDS:
+                    log_info("SESSION DISCARD", f"{session_seconds}s (below {MIN_SESSION_SECONDS}s minimum)", member)
+                    udata["session_start_timestamp"] = None
+                    udata["session_channel_id"] = None
                     await save_data(data)
-
-                    _total_time_in_channel = int(time.time()) - real_start_ts
-                    _break_secs = _total_time_in_channel - study_secs
-                    _study_secs = study_secs
-                    _do_pomo_log = True
+                    _needs_status_update = True
+                    _needs_presence_update = True
                 else:
-                    log_info("POMODORO DISCARD", f"{study_secs}s study (below minimum)", member)
-                    await save_data(data)
+                    real_start_ts = start_ts  # Save BEFORE clearing
+                    udata["session_start_timestamp"] = None
+                    udata["session_channel_id"] = None
 
-            elif ch_type == "study":
-                # --- STUDY SESSION: full tracking ---
-                # Capture old PB BEFORE updating for new-PB detection in session log
-                old_longest_session = udata.get("longest_session_seconds", 0)
-                _is_new_pb = session_seconds > old_longest_session
+                    if channel.id == POMODORO_CHANNEL_ID:
+                        # --- GROUP POMODORO: calculate study time excluding breaks ---
+                        study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
 
-                udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
-                udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
-                udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
-                udata["session_count"] = udata.get("session_count", 0) + 1
+                        if study_secs >= MIN_SESSION_SECONDS:
+                            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
+                            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
+                            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
+                            udata["session_count"] = udata.get("session_count", 0) + 1
 
-                if _is_new_pb:
-                    udata["longest_session_seconds"] = session_seconds
-                if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                    udata["best_day_seconds"] = udata["total_seconds_today"]
+                            if study_secs > udata.get("longest_session_seconds", 0):
+                                udata["longest_session_seconds"] = study_secs
+                            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                                udata["best_day_seconds"] = udata["total_seconds_today"]
 
-                # Record daily history for heatmap
-                today_str = get_ist_date().isoformat()
-                if "daily_history" not in udata:
-                    udata["daily_history"] = {}
-                udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+                            # Record daily history for heatmap
+                            today_str = get_ist_date().isoformat()
+                            if "daily_history" not in udata:
+                                udata["daily_history"] = {}
+                            udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
 
-                update_streak(udata)
-                await save_data(data)
-                _do_study_log = True
+                            update_streak(udata)
+                            await save_data(data)
 
-            elif ch_type == "doubt":
-                # --- DOUBT SESSION: tracked separately, no milestones ---
-                udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
-                udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
-                udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
-                await save_data(data)
-                _do_doubt_log = True
+                            _total_time_in_channel = int(time.time()) - real_start_ts
+                            _break_secs = _total_time_in_channel - study_secs
+                            _study_secs = study_secs
+                            _do_pomo_log = True
+                        else:
+                            log_info("POMODORO DISCARD", f"{study_secs}s study (below minimum)", member)
+                            await save_data(data)
 
-            elif ch_type == "discussion":
-                # --- DISCUSSION SESSION: log only, no achievements ---
-                udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
-                udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
-                await save_data(data)
-                _do_discussion_log = True
+                    elif ch_type == "study":
+                        # --- STUDY SESSION: full tracking ---
+                        # Capture old PB BEFORE updating for new-PB detection in session log
+                        old_longest_session = udata.get("longest_session_seconds", 0)
+                        _is_new_pb = session_seconds > old_longest_session
+
+                        udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
+                        udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
+                        udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
+                        udata["session_count"] = udata.get("session_count", 0) + 1
+
+                        if _is_new_pb:
+                            udata["longest_session_seconds"] = session_seconds
+                        if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                            udata["best_day_seconds"] = udata["total_seconds_today"]
+
+                        # Record daily history for heatmap
+                        today_str = get_ist_date().isoformat()
+                        if "daily_history" not in udata:
+                            udata["daily_history"] = {}
+                        udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+
+                        update_streak(udata)
+                        await save_data(data)
+                        _do_study_log = True
+
+                    elif ch_type == "doubt":
+                        # --- DOUBT SESSION: tracked separately, no milestones ---
+                        udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
+                        udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
+                        udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
+                        await save_data(data)
+                        _do_doubt_log = True
+
+                    elif ch_type == "discussion":
+                        # --- DISCUSSION SESSION: log only, no achievements ---
+                        udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
+                        udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
+                        await save_data(data)
+                        _do_discussion_log = True
+
+            # Snapshot copy of udata for DM/logging outside the lock
+            if uid in data["users"]:
+                _udata_copy = data["users"][uid].copy()
 
         # --- All Discord API work happens OUTSIDE the lock to avoid deadlocks ---
+        if _needs_status_update:
+            if channel.id != POMODORO_CHANNEL_ID:
+                await update_voice_channel_status(channel, None)
+            if _needs_presence_update:
+                await update_bot_presence(data)
+            return
 
         if _do_pomo_log:
             log_info("POMODORO END", f"{format_time_precise(_study_secs)} study ({format_time_precise(_break_secs)} break) in #{channel.name}", member)
@@ -1709,16 +1746,16 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             await update_bot_presence(data)
 
         if _do_study_log:
-            log_info("STUDY END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
-            await send_session_log(member, session_seconds, data, is_new_pb=_is_new_pb)
+            log_info("STUDY END", f"{format_time_precise(_session_seconds)} in #{channel.name}", member)
+            await send_session_log(member, _session_seconds, data, is_new_pb=_is_new_pb)
             await check_and_award_milestones(member, data)
-            bot.dispatch("study_session_ended", member, session_seconds)
+            bot.dispatch("study_session_ended", member, _session_seconds)
             await update_leaderboard_embed(bot.current_view_mode)
 
             # Post-leave DM based on session length
             try:
-                session_minutes = session_seconds // 60
-                today_hours = udata.get('total_seconds_today', 0) / 3600
+                session_minutes = _session_seconds // 60
+                today_hours = _udata_copy.get('total_seconds_today', 0) / 3600
                 ist_now = get_ist_now()
 
                 if session_minutes < 30:
@@ -1736,7 +1773,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                     # Champion territory
                     msg = discord.Embed(
                         title="🏆 Outstanding Session!",
-                        description=f"**{format_time_precise(session_seconds)}** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
+                        description=f"**{format_time_precise(_session_seconds)}** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
                         color=0xFFD700
                     )
                     msg.add_field(name="🔥 Today's Total", value=f"{today_hours:.1f}h", inline=True)
@@ -1747,7 +1784,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                     # Good but need more
                     msg = discord.Embed(
                         title="✅ Good Session! Keep It Going",
-                        description=f"**{format_time_precise(session_seconds)}** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
+                        description=f"**{format_time_precise(_session_seconds)}** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
                         color=0x57F287
                     )
                     msg.add_field(name="📊 Today So Far", value=f"{today_hours:.1f}h", inline=True)
@@ -1758,7 +1795,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                     # Under 3h — needs to come back urgently
                     msg = discord.Embed(
                         title="⚡ Come Back Soon!",
-                        description=f"**{format_time_precise(session_seconds)}** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
+                        description=f"**{format_time_precise(_session_seconds)}** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
                         color=0xEB459E
                     )
                     msg.add_field(name="📊 Today", value=f"{today_hours:.1f}h / 6h target", inline=True)
@@ -1775,15 +1812,15 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             await update_bot_presence(data)
 
         if _do_doubt_log:
-            log_info("DOUBT END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
-            await send_doubt_log(member, session_seconds, data, channel)
+            log_info("DOUBT END", f"{format_time_precise(_session_seconds)} in #{channel.name}", member)
+            await send_doubt_log(member, _session_seconds, data, channel)
             await check_and_award_doubt_milestones(member, data)
             await update_voice_channel_status(channel, None)
             await update_bot_presence(data)
 
         if _do_discussion_log:
-            logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
-            await send_discussion_log(member, session_seconds, data, channel)
+            logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(_session_seconds)} in #{channel.name}")
+            await send_discussion_log(member, _session_seconds, data, channel)
             await update_voice_channel_status(channel, None)
             await update_bot_presence(data)
     except Exception as e:
@@ -2048,10 +2085,12 @@ async def individual_pomodoro_loop(user_id: int):
                             
                             update_streak(udata)
                             await save_data(data)
-                            await check_and_award_milestones(member, data)
-                            bot.dispatch("study_session_ended", member, total_study)
-                            await update_leaderboard_embed(bot.current_view_mode)
-                            await update_bot_presence(data)
+
+                    if member:
+                        await check_and_award_milestones(member, data)
+                        bot.dispatch("study_session_ended", member, total_study)
+                        await update_leaderboard_embed(bot.current_view_mode)
+                        await update_bot_presence(data)
 
                     if member:
                         log_ch = await get_or_fetch_channel(LOG_CHANNEL_ID)
@@ -2089,23 +2128,24 @@ async def weekly_graph_dm_loop():
     while not bot.is_closed():
         try:
             now_ist = get_ist_now()
-            if now_ist.weekday() == 6 and now_ist.hour >= 21:
-                today_str = now_ist.date().isoformat()
-                
+            
+            # Find the most recent Sunday
+            days_since_sunday = (now_ist.weekday() + 1) % 7
+            prev_sunday_date = now_ist.date() - datetime.timedelta(days=days_since_sunday)
+            prev_sunday_9pm = datetime.datetime.combine(prev_sunday_date, datetime.time(21, 0), tzinfo=IST_TZ)
+            
+            if now_ist >= prev_sunday_9pm:
                 data = await load_data()
-                if "meta" not in data:
-                    data["meta"] = {}
-                last_send = data["meta"].get("last_weekly_graph_send")
+                meta = data.setdefault("meta", {})
+                last_send = meta.get("last_weekly_graph_send")
                 
-                if last_send != today_str:
-                    logging.info("[WEEKLY GRAPH] Sunday 9 PM IST reached. Generating and sending weekly study graphs...")
+                if last_send != prev_sunday_date.isoformat():
+                    logging.info(f"[WEEKLY GRAPH] Sunday 9 PM IST reached (or passed). Sending weekly graphs for {prev_sunday_date.isoformat()}...")
                     await send_weekly_graphs()
                     
                     async with bot.db_write_lock:
                         data = await load_data()
-                        if "meta" not in data:
-                            data["meta"] = {}
-                        data["meta"]["last_weekly_graph_send"] = today_str
+                        data.setdefault("meta", {})["last_weekly_graph_send"] = prev_sunday_date.isoformat()
                         await save_data(data)
                     logging.info("[WEEKLY GRAPH] Weekly study graphs sent successfully.")
         except Exception as e:
@@ -2267,6 +2307,13 @@ async def on_ready():
                 if not member.bot:
                     ensure_user(data, member)
 
+        # Ensure all currently active voice members are also registered
+        for uid_str, vc in active_member_vc.items():
+            if uid_str not in data["users"]:
+                member = vc.guild.get_member(int(uid_str))
+                if member:
+                    ensure_user(data, member)
+
         now_ts = int(time.time())
         for uid, udata in list(data.get("users", {}).items()):
             is_active = uid in active_member_vc
@@ -2333,9 +2380,6 @@ async def on_ready():
 
     # Restore/create leaderboard embed
     await update_leaderboard_embed("alltime")
-
-    logging.info("Bot ready. All systems operational.")
-
 
     logging.info("Bot ready. All systems operational.")
 
@@ -2433,7 +2477,11 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
         udata = data["users"][uid]
         if enforce_user_resets(udata):
             async with bot.db_write_lock:
-                await save_data(data)
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
         accent_color = USER_COLORS.get(target.id, DEFAULT_COLOR)
         total_hours = udata.get("total_seconds_alltime", 0) / 3600
         emblem = get_rank_emblem(total_hours)
@@ -2716,6 +2764,11 @@ async def compare_command(interaction: discord.Interaction, user: discord.Member
             t_changed = enforce_user_resets(data["users"][target_uid])
         if c_changed or t_changed:
             async with bot.db_write_lock:
+                data = await load_data()
+                if caller_uid in data["users"]:
+                    enforce_user_resets(data["users"][caller_uid])
+                if target_uid in data["users"]:
+                    enforce_user_resets(data["users"][target_uid])
                 await save_data(data)
 
         c = data["users"].get(caller_uid, _default_user(caller.display_name))
@@ -2958,7 +3011,11 @@ async def weekly_graph_command(interaction: discord.Interaction):
         udata = data["users"][uid]
         if enforce_user_resets(udata):
             async with bot.db_write_lock:
-                await save_data(data)
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
 
         today = get_ist_date()
         days = [today - datetime.timedelta(days=i) for i in range(6, -1, -1)]
@@ -3019,7 +3076,11 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
         udata = data["users"][uid]
         if enforce_user_resets(udata):
             async with bot.db_write_lock:
-                await save_data(data)
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
         today = get_ist_date()
         history = udata.get("daily_history", {})
         cal = calendar.monthcalendar(today.year, today.month)
@@ -3166,40 +3227,50 @@ async def checkin_command(interaction: discord.Interaction, plan: str):
     """Daily check-in with study plan."""
     await interaction.response.defer()
     try:
-        data = await load_data()
-        uid = str(interaction.user.id)
-        udata = ensure_user(data, interaction.user)
         now_ist = get_ist_now()
         today_str = now_ist.date().isoformat()
-
-        # Check if already checked in today
-        last_checkin = udata.get('last_checkin_date')
-        if last_checkin == today_str:
-            await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
-            return
-
-        checkin_streak = udata.get('checkin_streak', 0)
-        last_checkin_date_prev = udata.get('last_checkin_date_prev')
-
-        # Check streak
-        if last_checkin_date_prev:
-            try:
-                prev = datetime.date.fromisoformat(last_checkin_date_prev)
-                if (now_ist.date() - prev).days == 1:
-                    checkin_streak += 1
-                else:
-                    checkin_streak = 1
-            except Exception:
-                checkin_streak = 1
-        else:
-            checkin_streak = 1
-
-        udata['last_checkin_date'] = today_str
-        udata['checkin_plan'] = plan
-        udata['checkin_streak'] = checkin_streak
-        udata['last_checkin_date_prev'] = today_str
+        
+        # Read-only check first
+        data = await load_data()
+        uid = str(interaction.user.id)
+        if uid in data["users"]:
+            if data["users"][uid].get('last_checkin_date') == today_str:
+                await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
+                return
 
         async with bot.db_write_lock:
+            data = await load_data()
+            udata = ensure_user(data, interaction.user)
+            now_ist = get_ist_now()
+            today_str = now_ist.date().isoformat()
+
+            # Re-check inside lock
+            last_checkin = udata.get('last_checkin_date')
+            if last_checkin == today_str:
+                await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
+                return
+
+            checkin_streak = udata.get('checkin_streak', 0)
+            last_checkin_date_prev = udata.get('last_checkin_date_prev')
+
+            # Check streak
+            if last_checkin_date_prev:
+                try:
+                    prev = datetime.date.fromisoformat(last_checkin_date_prev)
+                    if (now_ist.date() - prev).days == 1:
+                        checkin_streak += 1
+                    else:
+                        checkin_streak = 1
+                except Exception:
+                    checkin_streak = 1
+            else:
+                checkin_streak = 1
+
+            udata['last_checkin_date'] = today_str
+            udata['checkin_plan'] = plan
+            udata['checkin_streak'] = checkin_streak
+            udata['last_checkin_date_prev'] = today_str
+
             await save_data(data)
 
         user_color = USER_COLORS.get(interaction.user.id, DEFAULT_COLOR)

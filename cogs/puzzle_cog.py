@@ -160,14 +160,15 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
             weekly_puzzle = data.setdefault("meta", {}).setdefault("weekly_puzzle", {}).setdefault("active", {})
 
             if not weekly_puzzle.get("question") or weekly_puzzle.get("question") == "Generating...":
-                _reply = "no_puzzle"
+                _reply = ("no_puzzle", None, None)
             elif uid in weekly_puzzle.setdefault("solvers", {}):
-                _reply = "already_solved"
+                _reply = ("already_solved", None, None)
             else:
                 solvers = weekly_puzzle["solvers"]
                 attempts = weekly_puzzle.setdefault("attempts", {})
                 correct_answer = weekly_puzzle.get("answer", "A")
                 explanation = weekly_puzzle.get("explanation", "")
+                options = weekly_puzzle.get("options", {})
                 now_ts = datetime.datetime.now(datetime.UTC).timestamp()
 
                 if chosen == correct_answer:
@@ -178,7 +179,7 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
                     udata["weekly_puzzles_solved"] = udata.get("weekly_puzzles_solved", 0) + 1
                     
                     await self.cog.bot.save_data(data)
-                    _reply = "correct"
+                    _reply = ("correct", explanation, None)
                 else:
                     # Incorrect attempt path
                     user_attempts = attempts.setdefault(uid, {"count": 0, "incorrect": [], "last_attempt_at": 0})
@@ -187,21 +188,22 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
                         user_attempts["incorrect"].append(chosen)
                     user_attempts["last_attempt_at"] = now_ts
                     await self.cog.bot.save_data(data)
-                    _reply = "wrong"
+                    _reply = ("wrong", None, options)
         # --- Lock released ---
 
-        if _reply == "no_puzzle":
+        if _reply[0] == "no_puzzle":
             await interaction.followup.send("❌ No weekly puzzle active right now. Check back later!", ephemeral=True)
             return
 
-        if _reply == "already_solved":
+        if _reply[0] == "already_solved":
             await interaction.followup.send(
                 "✅ You already solved this week's mega puzzle! Outstanding work.",
                 ephemeral=True,
             )
             return
 
-        if _reply == "correct":
+        if _reply[0] == "correct":
+            explanation = _reply[1]
             embed = discord.Embed(
                 title="🧠 Outstanding! Weekly Mega Puzzle Solved!",
                 description=f"You answered **{chosen}** — that's correct!\n\n📖 **Explanation:**\n{explanation}",
@@ -210,6 +212,18 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
             embed.set_footer(text="YPT Study Bot • Weekly Mega Puzzle • solved")
             await interaction.followup.send(embed=embed, ephemeral=True)
             logging.info(f"[PUZZLE] {interaction.user.display_name} solved the weekly mega puzzle")
+            return
+
+        if _reply[0] == "wrong":
+            options = _reply[2]
+            chosen_text = options.get(chosen, "")
+            embed = discord.Embed(
+                title=f"❌ Wrong — You chose {chosen}",
+                description=f"**You answered:** {chosen}. {chosen_text}\n\nThat's not right. Try again!\n\n💡 *Hint: Think step by step.*",
+                color=0xED4245,
+            )
+            embed.set_footer(text="You have unlimited attempts. Try again!")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
     @discord.ui.button(label="A", style=discord.ButtonStyle.success, custom_id="weekly_puzzle_answer_A")
@@ -538,9 +552,21 @@ class PuzzleCog(commands.Cog):
             logging.error(f"[PUZZLE] _post_weekly_puzzle failed: {e}", exc_info=True)
             return False
 
-    async def _publish_weekly_leaderboard(self, now_ist):
+    async def _publish_weekly_leaderboard(self, now_ist, force=False):
         """Generates and posts the weekly mega puzzle shoutout & leaderboard."""
         try:
+            expected_start = self.get_expected_weekly_start_date(now_ist)
+            expected_start_str = expected_start.isoformat()
+
+            if not force:
+                async with self.bot.db_write_lock:
+                    data = await self.bot.load_data()
+                    weekly_data = data.setdefault("meta", {}).setdefault("weekly_puzzle", {})
+                    if weekly_data.get("last_leaderboard_week") == expected_start_str:
+                        return
+                    weekly_data["last_leaderboard_week"] = expected_start_str
+                    await self.bot.save_data(data)
+
             data = await self.bot.load_data()
             weekly_puzzle = data.get("meta", {}).get("weekly_puzzle", {}).get("active", {})
             
@@ -683,7 +709,13 @@ class PuzzleCog(commands.Cog):
     async def midnight_kick_loop(self):
         try:
             now_ist = get_ist_now()
-            today_str = now_ist.date().isoformat()
+
+            # If after midnight, kick for the day that just ended (yesterday)
+            if now_ist.hour == 0:
+                kick_date = now_ist.date() - datetime.timedelta(days=1)
+            else:
+                kick_date = now_ist.date()
+            kick_date_str = kick_date.isoformat()
 
             is_in_window = (now_ist.hour == 23 and now_ist.minute >= 50) or (now_ist.hour == 0 and now_ist.minute < 15)
             if not is_in_window:
@@ -692,20 +724,20 @@ class PuzzleCog(commands.Cog):
             async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
                 loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
-                if self._midnight_kick_done == today_str or loop_state.get("kick_date") == today_str:
+                if self._midnight_kick_done == kick_date_str or loop_state.get("kick_date") == kick_date_str:
                     return
 
-                self._midnight_kick_done = today_str
-                loop_state["kick_date"] = today_str
+                self._midnight_kick_done = kick_date_str
+                loop_state["kick_date"] = kick_date_str
                 await self.bot.save_data(data)
 
-            logging.info("[PUZZLE] Running midnight puzzle kick check...")
+            logging.info(f"[PUZZLE] Running midnight puzzle kick check for {kick_date_str}...")
 
             puzzle_data = data.get("meta", {}).get("puzzle_of_day", {})
-            today_puzzle = puzzle_data.get(today_str)
+            today_puzzle = puzzle_data.get(kick_date_str)
 
             if not today_puzzle:
-                logging.warning("[PUZZLE] No puzzle found for today — skipping kick check")
+                logging.warning(f"[PUZZLE] No puzzle found for {kick_date_str} — skipping kick check")
                 return
 
             solved_users = set(today_puzzle.get("solved_users", []))
@@ -766,7 +798,7 @@ class PuzzleCog(commands.Cog):
                     pass
 
                 try:
-                    await member.kick(reason=f"Did not solve Puzzle of the Day ({today_str})")
+                    await member.kick(reason=f"Did not solve Puzzle of the Day ({kick_date_str})")
                     kicked_count += 1
                     logging.info(f"[PUZZLE] Kicked {member.display_name} for unsolved puzzle")
                 except discord.Forbidden:
@@ -889,30 +921,44 @@ class PuzzleCog(commands.Cog):
             await interaction.followup.send("⚠️ You already have an active verification session in progress!", ephemeral=True)
             return
 
+        uid = str(interaction.user.id)
+        data = await self.bot.load_data()
+        udata = data.get("users", {}).get(uid, {})
+
+        now_ist = get_ist_now()
+        last_attempt_str = udata.get("puzzle_verify_last")
+        if last_attempt_str:
+            try:
+                last_attempt = datetime.datetime.fromisoformat(last_attempt_str)
+                if last_attempt.tzinfo is None:
+                    last_attempt = last_attempt.replace(tzinfo=IST_TZ)
+                elapsed_h = (now_ist - last_attempt).total_seconds() / 3600
+                if elapsed_h < VERIFY_COOLDOWN_HOURS and udata.get("puzzle_verify_failed", False):
+                    remaining_h = VERIFY_COOLDOWN_HOURS - elapsed_h
+                    await interaction.followup.send(
+                        f"⏰ You failed your last verification attempt. Try again in **{remaining_h:.1f} hours**.",
+                        ephemeral=True,
+                    )
+                    return
+            except Exception as e:
+                logging.warning(f"[PUZZLE] Failed parsing last verification attempt date: {e}")
+
+        # Send the first status message to the user's DM to test if DMs are open
+        try:
+            status_msg = await interaction.user.send(
+                f"🔐 **Verification Status: 0/{VERIFY_PUZZLES_REQUIRED} solved.**\n"
+                f"Generating Logic Puzzle 1/{VERIFY_PUZZLES_REQUIRED}... Please wait (taking up to 30 seconds)."
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I couldn't DM you. Please enable DMs from server members and try again.",
+                ephemeral=True,
+            )
+            return
+
+        # Succeeded in sending DM, now we start the active verification session
         self._active_verifications.add(interaction.user.id)
         try:
-            uid = str(interaction.user.id)
-            data = await self.bot.load_data()
-            udata = data.get("users", {}).get(uid, {})
-
-            now_ist = get_ist_now()
-            last_attempt_str = udata.get("puzzle_verify_last")
-            if last_attempt_str:
-                try:
-                    last_attempt = datetime.datetime.fromisoformat(last_attempt_str)
-                    if last_attempt.tzinfo is None:
-                        last_attempt = last_attempt.replace(tzinfo=IST_TZ)
-                    elapsed_h = (now_ist - last_attempt).total_seconds() / 3600
-                    if elapsed_h < VERIFY_COOLDOWN_HOURS and udata.get("puzzle_verify_failed", False):
-                        remaining_h = VERIFY_COOLDOWN_HOURS - elapsed_h
-                        await interaction.followup.send(
-                            f"⏰ You failed your last verification attempt. Try again in **{remaining_h:.1f} hours**.",
-                            ephemeral=True,
-                        )
-                        return
-                except Exception as e:
-                    logging.warning(f"[PUZZLE] Failed parsing last verification attempt date: {e}")
-
             await interaction.followup.send(
                 f"🔐 **Verification started.** Solve {VERIFY_PUZZLES_REQUIRED} logic puzzles to rejoin.\n"
                 f"I will send them one at a time via DM. Good luck!",
@@ -921,10 +967,11 @@ class PuzzleCog(commands.Cog):
 
             score = 0
             for i in range(1, VERIFY_PUZZLES_REQUIRED + 1):
-                status_msg = await interaction.user.send(
-                    f"🔐 **Verification Status: {score}/{VERIFY_PUZZLES_REQUIRED} solved.**\n"
-                    f"Generating Logic Puzzle {i}/{VERIFY_PUZZLES_REQUIRED}... Please wait (taking up to 30 seconds)."
-                )
+                if i > 1:
+                    status_msg = await interaction.user.send(
+                        f"🔐 **Verification Status: {score}/{VERIFY_PUZZLES_REQUIRED} solved.**\n"
+                        f"Generating Logic Puzzle {i}/{VERIFY_PUZZLES_REQUIRED}... Please wait (taking up to 30 seconds)."
+                    )
 
                 # Run generation with timeout
                 try:
@@ -960,7 +1007,11 @@ class PuzzleCog(commands.Cog):
                     on_answer=on_answer,
                 )
 
-                await status_msg.delete()
+                try:
+                    await status_msg.delete()
+                except Exception as del_err:
+                    logging.warning(f"[VERIFY] Failed to delete status message: {del_err}")
+
                 await interaction.user.send(embed=embed, view=view)
                 await view.wait()
 
@@ -1010,9 +1061,11 @@ class PuzzleCog(commands.Cog):
                 await self.bot.save_data(fresh_data)
 
             try:
-                guild = interaction.guild
+                guild = interaction.guild or (self.bot.guilds[0] if self.bot.guilds else None)
                 if guild:
                     member = guild.get_member(interaction.user.id)
+                    if not member:
+                        member = await guild.fetch_member(interaction.user.id)
                     if member:
                         unverified_role = discord.utils.get(guild.roles, name="Unverified")
                         if unverified_role and unverified_role in member.roles:
@@ -1208,7 +1261,7 @@ class PuzzleCog(commands.Cog):
     async def post_weekly_leaderboard_now(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         now_ist = get_ist_now()
-        await self._publish_weekly_leaderboard(now_ist)
+        await self._publish_weekly_leaderboard(now_ist, force=True)
         await interaction.followup.send("Weekly leaderboard published!", ephemeral=True)
 
 

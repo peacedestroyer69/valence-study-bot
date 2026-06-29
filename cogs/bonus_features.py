@@ -169,7 +169,8 @@ class BonusFeaturesCog(commands.Cog):
             result = await _call_gemini(prompt, fallback="", timeout=8.0,
                                         model_preference=["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"])
             if result and len(result) > 20:
-                ai_quote = result.strip()
+                from cogs.gemini_brain import clean_message_text
+                ai_quote = clean_message_text(result)
                 ai_author = f"Gemini AI for {username}"
         except Exception as e:
             logging.warning(f"[MOTIVATE] Gemini quote generation failed: {e}")

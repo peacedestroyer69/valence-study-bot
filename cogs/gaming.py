@@ -372,18 +372,31 @@ class GamingCog(commands.Cog):
                                 winner_discord = f"<@{winner_id}>"
                                 loser_discord = f"<@{loser_id}>"
 
+                                # Fetch channel/guild and members before the lock
+                                channel = (
+                                    await self.bot.get_or_fetch_channel(CHESS_TEXT_CHANNEL_ID)
+                                ) or (
+                                    await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
+                                )
+                                guild = channel.guild if channel else None
+
                                 # Update gaming stats & mark game as processed inside write lock
                                 async with self.bot.db_write_lock:
                                     data = await self.bot.load_data()
                                     
                                     # Recheck inside lock
-                                    p_games = data.get("processed_chess_games", [])
+                                    p_games = data.setdefault("processed_chess_games", [])
                                     if game_id in p_games:
                                         continue
 
                                     for uid in [winner_id, loser_id]:
-                                        if uid not in data["users"]:
-                                            data["users"][uid] = {}
+                                        if uid not in data.setdefault("users", {}):
+                                            member = guild.get_member(int(uid)) if guild else None
+                                            if member:
+                                                self.bot.ensure_user(data, member)
+                                            else:
+                                                disp_name = winner_lichess if uid == winner_id else loser_lichess
+                                                data["users"][uid] = self.bot._default_user(disp_name)
                                         data["users"][uid].setdefault("gaming_wins", 0)
                                         data["users"][uid].setdefault("gaming_losses", 0)
 
@@ -396,11 +409,6 @@ class GamingCog(commands.Cog):
 
                                 # Announce in chess text channel
                                 speed = game_data.get("speed", "unknown")
-                                channel = (
-                                    await self.bot.get_or_fetch_channel(CHESS_TEXT_CHANNEL_ID)
-                                ) or (
-                                    await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
-                                )
 
                                 if channel:
                                     embed = discord.Embed(

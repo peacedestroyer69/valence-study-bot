@@ -64,6 +64,7 @@ async def _get_model_instance(key: str, model_name: str):
                 genai.configure(api_key=key)
                 model = genai.GenerativeModel(model_name)
                 model._client = genai_client.get_default_generative_client()
+                model._async_client = genai_client.get_default_generative_async_client()
                 _cached_models[cache_key] = model
                 logging.info(f"[GEMINI] Initialized model '{model_name}' for key (ends with ...{key[-8:]})")
             except Exception as e:
@@ -101,19 +102,27 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                 loop = asyncio.get_running_loop()
                 gen_config = {"max_output_tokens": max_output_tokens, "temperature": 0.7}
                 response = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda m=model: m.generate_content(prompt, generation_config=gen_config)),
-                    timeout=timeout,
+                    loop.run_in_executor(None, lambda m=model: m.generate_content(
+                        prompt,
+                        generation_config=gen_config,
+                        request_options={"timeout": timeout}
+                    )),
+                    timeout=timeout + 2.0,
                 )
                 text = response.text.strip()
                 if text:
                     logging.info(f"[GEMINI] Successful generation using model '{model_name}' on key #{key_idx + 1}")
                     return text
             except asyncio.TimeoutError:
-                logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out using '{model_name}' — trying next model/key")
+                logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (asyncio) using '{model_name}' — trying next key")
+                break
             except Exception as e:
                 err_str = str(e).lower()
-                if "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str:
-                    logging.error(f"[GEMINI] Key #{key_idx + 1} is invalid/forbidden/blocked — moving to next key. Error: {e}")
+                if "deadline" in err_str or "timeout" in err_str or "exceeded" in err_str:
+                    logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) using '{model_name}': {e} — trying next key")
+                    break
+                elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str or "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str:
+                    logging.error(f"[GEMINI] Key #{key_idx + 1} quota/auth/block error — moving to next key. Error: {e}")
                     break
                 else:
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} failed with '{model_name}': {e} — trying next model")
@@ -185,6 +194,14 @@ _FALLBACK_WEEKLY_PUZZLES = [
 
 def _clean_json_response(raw: str) -> str:
     raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        if len(lines) > 1 and lines[0].strip().startswith("```"):
+            raw = "\n".join(lines[1:])
+    if raw.endswith("```"):
+        raw = raw.rsplit("```", 1)[0]
+    raw = raw.strip()
+
     first_brace = raw.find("{")
     first_bracket = raw.find("[")
     
@@ -210,11 +227,28 @@ def _clean_json_response(raw: str) -> str:
     if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
         return raw[start_idx:end_idx + 1].strip()
         
-    if raw.startswith("```"):
-        raw = "\n".join(raw.split("\n")[1:])
-    if raw.endswith("```"):
-        raw = raw.rsplit("```", 1)[0]
     return raw.strip()
+
+def safe_load_json(raw: str) -> dict:
+    cleaned = _clean_json_response(raw)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        import re
+        cleaned_no_trailing = re.sub(r',(?=\s*?[}\]])', '', cleaned)
+        return json.loads(cleaned_no_trailing)
+
+def clean_message_text(text: str) -> str:
+    if not text:
+        return ""
+    text = text.strip()
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        text = text[1:-1].strip()
+    text = text.replace("**", "").replace("*", "").replace("__", "").replace("_", "").replace("`", "")
+    text = "\n".join(line.strip() for line in text.split("\n") if line.strip())
+    if len(text) > 1800:
+        text = text[:1797] + "..."
+    return text.strip()
 
 # ============================================================
 # 1. GENERATE PUZZLE WITH REFINEMENT & DOUBLE SOLVER
@@ -340,7 +374,7 @@ Respond ONLY with a JSON object in this format (no markdown, no extra text):
             continue
 
         try:
-            candidate = json.loads(_clean_json_response(final_json_raw))
+            candidate = safe_load_json(final_json_raw)
             required_keys = {"question", "options", "answer", "explanation"}
             if not required_keys.issubset(candidate):
                 continue
@@ -377,7 +411,7 @@ Respond ONLY with this JSON format (no markdown, no extra text):
             continue
 
         try:
-            solve_1 = json.loads(_clean_json_response(raw_solve_1))
+            solve_1 = safe_load_json(raw_solve_1)
             ans_1 = solve_1.get("solved_answer", "").strip().upper()
             if ans_1 != candidate["answer"]:
                 logging.warning(f"[PUZZLE PIPELINE] Solver 1 disagreed! Intended: {candidate['answer']}, Solved: {ans_1}")
@@ -407,7 +441,7 @@ Respond ONLY with a JSON object:
             continue
 
         try:
-            solve_2 = json.loads(_clean_json_response(raw_solve_2))
+            solve_2 = safe_load_json(raw_solve_2)
             ans_2 = solve_2.get("solved_answer", "").strip().upper()
             if ans_2 != candidate["answer"]:
                 logging.warning(f"[PUZZLE PIPELINE] Solver 2 disagreed! Intended: {candidate['answer']}, Solved: {ans_2}")
@@ -451,7 +485,8 @@ Rules:
         f"Your {hours_alltime:.0f} hours all-time should mean more than this. "
         f"Use /verify to rejoin — solve 3 puzzles and prove you belong here."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def personalized_wakeup_msg(username: str, yesterday_hours: float, streak: int, goal_hours: float) -> str:
     prompt = f"""Write a short, sharp 6 AM wake-up study reminder for a JEE aspirant named {username}.
@@ -473,7 +508,8 @@ Rules:
         f"{'Yesterday was ' + str(round(yesterday_hours, 1)) + 'h — build on it today.' if yesterday_hours > 0 else 'Yesterday was a zero. Today is your redemption.'} "
         f"Open your notes and get in a study VC now."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def dropped_off_reminder(username: str, hours_today: float, goal_hours: float, hours_left: float, time_str: str, peer_name: str = "", peer_hours: float = 0.0) -> str:
     gap = max(0.0, goal_hours - hours_today)
@@ -494,7 +530,8 @@ Tone: Warm but urgent. They showed up — acknowledge that. Push them to come ba
         f"You're only {gap:.1f}h away from your daily goal — don't let today's effort go to waste. "
         f"Get back in a study channel and finish what you started."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def not_started_reminder(username: str, time_str: str, goal_hours: float, hours_left: float, peer_name: str = "", peer_hours: float = 0.0) -> str:
     peer_ctx = f"{peer_name} already has {peer_hours:.1f}h logged today." if peer_name else ""
@@ -515,7 +552,8 @@ Rules:
         f"{'Your partner ' + peer_name + ' already has ' + str(round(peer_hours, 1)) + 'h. ' if peer_name else ''}"
         f"Get in a study channel right now — {hours_left:.1f}h left in the day."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def goal_congrats_msg(username: str, hours_today: float, goal_hours: float) -> str:
     prompt = f"""Write a genuine, energetic congratulations Discord DM for a JEE aspirant named {username} who just crossed their daily study goal.
@@ -533,7 +571,8 @@ Rules:
         f"You did it, {username}! {hours_today:.1f}h today — goal hit. "
         f"That's the kind of consistency that builds rank. Rest up, no more reminders from me today."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def push_past_limit_msg(username: str, hours_today: float, goal_hours: float, hours_left: float) -> str:
     extra_target = goal_hours + 2.0
@@ -554,7 +593,8 @@ Rules:
         f"You've got {hours_left:.1f}h left today. "
         f"Toppers push to {extra_target:.0f}h+ on good days. One more session."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 async def personalized_study_reminder(username: str, hours_today: float, goal_hours: float, time_str: str, peer_name: str = "", peer_hours: float = 0.0) -> str:
     gap = max(0.0, goal_hours - hours_today)
@@ -574,7 +614,8 @@ Rules:
         f"It's {time_str}, {username} — {hours_today:.1f}h done, "
         f"{gap:.1f}h to go. Get back in a study channel."
     )
-    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    res = await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
+    return clean_message_text(res)
 
 
 # ============================================================
