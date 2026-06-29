@@ -9,6 +9,10 @@
 # 5. The bot will now stay awake indefinitely on free-tier hosts.
 # ============================================================
 
+import os
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 import calendar
 import discord
 from discord.ext import commands
@@ -19,21 +23,19 @@ import asyncio
 import json
 import datetime
 import time
-import os
 import logging
 import random
 import signal
 
-# --- Timezone Unification to IST ---
-IST_TZ = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-
-def get_ist_now() -> datetime.datetime:
-    """Returns the current datetime in Indian Standard Time (IST)."""
-    return datetime.datetime.now(IST_TZ)
-
-def get_ist_date() -> datetime.date:
-    """Returns the current date in Indian Standard Time (IST)."""
-    return get_ist_now().date()
+from utils import (
+    IST_TZ, get_ist_now, get_ist_date, format_time, format_time_precise, format_mm_ss, generate_progress_bar,
+    DAILY_GOAL_SECONDS, MIN_SESSION_SECONDS, WEEKLY_RESET_DAY,
+    MILESTONE_ROLES, DOUBT_MILESTONE_ROLES, TEXT_MILESTONE_ROLES,
+    STUDY_CHANNELS, DOUBT_CHANNELS, DISCUSSION_CHANNELS, STUDY_TEXT_CHANNELS, GAME_CHANNELS,
+    VALENCE_ID, UJJWAL_ID, USER_COLORS, DEFAULT_COLOR, POMODORO_CHANNEL_ID,
+    POMODORO_STUDY_SECONDS, POMODORO_BREAK_SECONDS, POMODORO_CYCLE_SECONDS,
+    DOUBT_TAGS, DOUBT_QUOTES, MOTIVATIONAL_QUOTES
+)
 
 # --- Logging Helper Functions ---
 def log_info(tag: str, message: str, member: discord.Member | None = None):
@@ -54,9 +56,6 @@ def log_error(tag: str, message: str, member: discord.Member | None = None, exc:
 
 import firebase_admin
 from firebase_admin import credentials, firestore
-from dotenv import load_dotenv
-
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # --- Firebase Init ---
 try:
@@ -84,108 +83,8 @@ CELEBRATION_CHANNEL_ID = int(os.getenv("CELEBRATION_CHANNEL_ID", "15142082527604
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")  # Google Gemini AI key — add to Render env vars
 PUZZLE_CHANNEL_ID = int(os.getenv("PUZZLE_CHANNEL_ID", "1514208252760424591"))  # Channel for daily puzzle
 
-# --- Hardcoded Configuration ---
-
-# Maps total focused study hours (all-time) (int) -> Discord Role ID (int)
-# Only the HIGHEST is kept.
-MILESTONE_ROLES = {
-    5:   1514208595737182338,  # 🥉 Bronze Scholar     — 5 hours
-    25:  1514208694051672195,  # 🥈 Silver Grinder     — 25 hours
-    50:  1514210766256082954,  # 🥇 Gold Grinder       — 50 hours
-    100: 1514208770887127192,  # 💎 Diamond Grindmaster — 100 hours
-    200: 1514208898406416505,  # 👑 Legendary Studier   — 200 hours
-}
-
-# Doubt milestone roles — awarded based on total doubt session hours (all-time)
-# Only the HIGHEST is kept.
-DOUBT_MILESTONE_ROLES = {
-    2:   1514228187352268830,  # 🔰 Doubt Beginner     — 2 hours
-    5:   1514238409449930752,  # 🧠 Doubt Explorer     — 5 hours
-    10:  1514238834559291563,  # 💡 Doubt Master       — 10 hours
-    25:  1514238964008226988,  # 🎓 Doubt Professor    — 25 hours
-    50:  1514254737372090438,  # 🧿 Never Had a Doubt in Life — 50 hours
-}
-
-# Minimum session length in seconds to count (prevents AFK abuse)
-MIN_SESSION_SECONDS = 60
-
-# Daily study goal in seconds (1.5 hours = 5400)
-DAILY_GOAL_SECONDS = 5400
-
-# Weekly reset day: 0 = Monday, 6 = Sunday
-WEEKLY_RESET_DAY = 0
-
-# Custom accent colors per Discord User ID (hex int)
-USER_COLORS = {
-    856485470171299891:  0x5865F2,  # Valence -> Discord Blurple
-    1403716456025165864: 0xEB459E,  # Ujjwal  -> Discord Pink
-}
-DEFAULT_COLOR = 0x2B2D31
-
-# --- Voice Channel Categories ---
-# Study channels: full tracking, milestones, leaderboard, streaks
-STUDY_CHANNELS = {1514208313452007514, 1514596473629708298}  # Study Room, Group Study
-
-# Doubt channels: tracked separately, tagged with subject, no milestones
-DOUBT_CHANNELS = {
-    1514222394628112536,  # Test Discussion stuff
-    1514186752301076510,  # Doubt #1
-    1514221019005714462,  # Doubt #2
-    1514221629864149084,  # Doubt #3
-}
-
-# Discussion channels: logged only, no achievements
-DISCUSSION_CHANNELS = {1514187630374289418}  # General
-
-# Text study channels: messages are counted for a text activity leaderboard
-STUDY_TEXT_CHANNELS = {1514241642415001610}  # Study Discussion
-
-# Text activity milestone roles — based on total messages (all-time) sent in Study Discussion
-# Only the HIGHEST is kept.
-TEXT_MILESTONE_ROLES = {
-    50:   1514254760386236496,  # 📝 Active Learner (50 msgs)
-    200:  1514255291578056714,  # 💬 Discussion Pro (200 msgs)
-    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 msgs)
-    1000: 1514255518288576672,  # 📖 Study Sage (1000 msgs)
-}
-
-
-# --- Pomodoro Configuration ---
-POMODORO_CHANNEL_ID = 1514244606827561171  # Group Pomodoro voice channel
-POMODORO_STUDY_SECONDS = 60 * 60  # 60 minutes study
-POMODORO_BREAK_SECONDS = 10 * 60  # 10 minutes break
-POMODORO_CYCLE_SECONDS = POMODORO_STUDY_SECONDS + POMODORO_BREAK_SECONDS  # 70 min total
-
 # In-memory storage for individual pomodoros (user_id -> dict)
 active_pomodoros = {}
-
-# Subject tags auto-suggested for doubt sessions
-DOUBT_TAGS = [
-    "🧪 Physics", "⚗️ Chemistry", "📐 Maths",
-    "🧬 Biology", "💻 CS", "🌍 General",
-]
-
-# Doubt-specific motivational quotes
-DOUBT_QUOTES = [
-    "Doubts are the stepping stones to clarity. 🧠",
-    "The only stupid question is the one you didn't ask.",
-    "Understanding > Memorizing. Always.",
-    "Every doubt cleared is a concept mastered. 💡",
-    "Asking questions is a sign of strength, not weakness.",
-    "Confusion today, clarity tomorrow. Keep asking.",
-]
-
-# Rotating motivational quotes shown in session log embeds
-MOTIVATIONAL_QUOTES = [
-    "The grind never lies. 📚",
-    "Every hour compounds. Keep going.",
-    "Discipline > Motivation. Always.",
-    "Your future self is watching. Don't disappoint.",
-    "JEE doesn't care about excuses. Neither should you.",
-    "One more hour. That's the gap between you and them.",
-    "Consistency beats intensity every single time.",
-    "The pain of discipline is lighter than the pain of regret.",
-]
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Use a writable data directory (AppData on Windows, script dir on Linux/cloud)
@@ -194,8 +93,7 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(_DATA_DIR, "study_data.json")
 data_lock = asyncio.Lock()
 
-# Global variable to track current leaderboard view mode
-current_view_mode = "alltime"
+# Leaderboard view mode is stored on the bot object (set in Section 3)
 
 
 # ============================================================
@@ -306,32 +204,71 @@ def calculate_pomodoro_study_seconds(start_time: int, end_time: int) -> int:
     return total_study
 
 
-def format_mm_ss(seconds: int) -> str:
-    """Format seconds as MM:SS."""
-    m, s = divmod(max(0, seconds), 60)
-    return f"{m:02d}:{s:02d}"
-
-
 async def load_data() -> dict:
-    """Reads and returns the JSON data from Firestore, falls back to local JSON if missing."""
+    """Reads and returns the JSON data from Firestore (document-per-user), falls back to local JSON if missing.
+    NOTE: This function does NOT acquire any lock. Callers that need to
+    read-modify-write must wrap the entire sequence in `bot.db_write_lock`."""
     if db:
         try:
-            # Using to_thread for synchronous firestore calls to avoid blocking event loop
-            def fetch_doc():
-                doc_ref = db.collection('bot_data').document('main')
-                doc = doc_ref.get()
-                if doc.exists:
-                    return doc.to_dict()
-                else:
-                    data = _default_data()
-                    doc_ref.set(data)
-                    return data
-            return await asyncio.to_thread(fetch_doc)
+            def fetch_db_data():
+                # 1. Fetch metadata
+                meta_ref = db.collection('bot_data').document('meta')
+                meta_doc = meta_ref.get()
+                
+                # 2. Check for legacy monolithic document first
+                legacy_ref = db.collection('bot_data').document('main')
+                legacy_doc = legacy_ref.get()
+                
+                # 3. Check users collection
+                users_coll = db.collection('study_users').stream()
+                users_list = list(users_coll)
+                
+                # Migration condition: legacy document exists and users collection is empty
+                if legacy_doc.exists and not users_list:
+                    logging.info("[DB MIGRATION] Migrating monolithic Firestore document to document-per-user schema.")
+                    legacy_data = legacy_doc.to_dict()
+                    meta_data = legacy_data.get("meta", _default_data()["meta"])
+                    
+                    # Write metadata
+                    meta_ref.set(meta_data)
+                    
+                    # Write each user to their own document
+                    users_data = legacy_data.get("users", {})
+                    for uid, udata in users_data.items():
+                        db.collection('study_users').document(uid).set(udata)
+                        
+                    # Delete the legacy document to prevent re-migration
+                    legacy_ref.delete()
+                    logging.info("[DB MIGRATION] Migration completed successfully.")
+                    return legacy_data
+                
+                # If we don't have meta yet, but legacy doesn't exist, we start fresh
+                meta_data = meta_doc.to_dict() if meta_doc.exists else _default_data()["meta"]
+                
+                data = {
+                    "users": {},
+                    "meta": meta_data
+                }
+                
+                # Populating users from individual user docs
+                for doc in users_list:
+                    data["users"][doc.id] = doc.to_dict()
+                    
+                # If both are empty (fresh install)
+                if not meta_doc.exists and not users_list:
+                    default_d = _default_data()
+                    meta_ref.set(default_d["meta"])
+                    return default_d
+                    
+                return data
+                
+            return await asyncio.to_thread(fetch_db_data)
         except Exception as e:
             logging.error(f"Firestore read error: {e}. Falling back to local.")
-            
-    try:
-        async with data_lock:
+
+    # Local JSON fallback with asyncio.to_thread to prevent event loop blocking
+    def load_local_sync():
+        try:
             if not os.path.exists(DATA_FILE):
                 data = _default_data()
                 os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
@@ -343,32 +280,62 @@ async def load_data() -> dict:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return data
-    except (json.JSONDecodeError, IOError) as e:
-        logging.error(f"Failed to load data file: {e}. Reinitializing.")
-        data = _default_data()
-        async with data_lock:
+        except (json.JSONDecodeError, IOError) as e:
+            logging.error(f"Failed to load data file: {e}. Backing up corrupted file and reinitializing.")
+            if os.path.exists(DATA_FILE):
+                timestamp = int(time.time())
+                corrupt_path = f"{DATA_FILE}.corrupt_{timestamp}"
+                try:
+                    os.rename(DATA_FILE, corrupt_path)
+                    logging.info(f"Corrupted file renamed to: {corrupt_path}")
+                except Exception as rename_err:
+                    logging.error(f"Failed to rename corrupted file: {rename_err}")
+            
+            data = _default_data()
             os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
             with open(DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-        return data
+            return data
+
+    return await asyncio.to_thread(load_local_sync)
 
 
 async def save_data(data: dict):
-    """Saves data to Firestore and local JSON file."""
+    """Saves data to Firestore (document-per-user) and local JSON file.
+    Callers MUST hold `bot.db_write_lock` before calling this."""
     if db:
         try:
-            def push_doc():
-                db.collection('bot_data').document('main').set(data)
-            await asyncio.to_thread(push_doc)
+            def push_db_data():
+                # Save metadata
+                db.collection('bot_data').document('meta').set(data.get("meta", {}))
+                # Save each user individually
+                users = data.get("users", {})
+                for uid, udata in users.items():
+                    db.collection('study_users').document(uid).set(udata)
+            await asyncio.to_thread(push_db_data)
         except Exception as e:
             logging.error(f"Firestore write error: {e}")
-            
-    async with data_lock:
+
+    # Local JSON fallback
+    def save_local_sync():
         try:
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
+            # First write to temporary file then rename to avoid corruption on crash/power loss
+            temp_file = f"{DATA_FILE}.tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            # Atomic rename
+            if os.path.exists(DATA_FILE):
+                # Save backup
+                backup_file = f"{DATA_FILE}.bak"
+                if os.path.exists(backup_file):
+                    os.remove(backup_file)
+                os.rename(DATA_FILE, backup_file)
+            os.rename(temp_file, DATA_FILE)
         except (IOError, OSError) as e:
             logging.error(f"Failed to save data file: {e}")
+
+    await asyncio.to_thread(save_local_sync)
+
 
 
 def enforce_user_resets(udata: dict) -> bool:
@@ -449,8 +416,13 @@ bot.load_data = load_data
 bot.save_data = save_data
 bot.data_lock = data_lock
 bot.db_write_lock = asyncio.Lock()
+bot.ensure_user = ensure_user
+bot._default_user = _default_user
+bot.active_pomodoros = active_pomodoros
 bot._message_buffer = {}
 bot._message_buffer_lock = asyncio.Lock()
+bot.current_view_mode = "alltime"  # Leaderboard view state
+bot._http_session = None  # Shared aiohttp session (created in on_ready)
 
 async def get_or_fetch_channel(channel_id: int):
     """Retrieves a channel from cache, or fetches it via the API if not cached."""
@@ -472,7 +444,7 @@ async def get_or_fetch_channel(channel_id: int):
 bot.get_or_fetch_channel = get_or_fetch_channel
 
 async def setup_hook():
-    for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming", "cogs.puzzle_cog"]:
+    for cog_name in ["cogs.discipline", "cogs.bonus_features", "cogs.gaming", "cogs.puzzle_cog", "cogs.jee_prep", "cogs.gamification"]:
         if cog_name in bot.extensions:
             continue
         try:
@@ -488,47 +460,7 @@ bot.setup_hook = setup_hook
 # SECTION 5: LEADERBOARD HELPERS
 # ============================================================
 
-def format_time(seconds: int) -> str:
-    """Converts raw seconds into human-readable format."""
-    if seconds < 60:
-        return "< 1m"
-    minutes = seconds // 60
-    if seconds < 3600:
-        return f"{minutes}m"
-    hours = seconds // 3600
-    remaining_minutes = (seconds % 3600) // 60
-    if seconds < 86400:
-        return f"{hours}h {remaining_minutes:02d}m"
-    days = seconds // 86400
-    remaining_hours = (seconds % 86400) // 3600
-    remaining_minutes = (seconds % 3600) // 60
-    return f"{days}d {remaining_hours}h {remaining_minutes:02d}m"
-
-
-def format_time_precise(seconds: int) -> str:
-    """Precise format including seconds, for session logs."""
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-    if hours > 0:
-        return f"{hours}h {minutes:02d}m {secs:02d}s"
-    if minutes > 0:
-        return f"{minutes}m {secs:02d}s"
-    return f"{secs}s"
-
-
-def generate_progress_bar(value: int, maximum: int, length: int = 10) -> str:
-    """Generates a visual progress bar using block emojis."""
-    if maximum > 0:
-        ratio = min(value / maximum, 1.0)
-        filled = round(ratio * length)
-    else:
-        filled = 0
-        ratio = 0.0
-    empty = length - filled
-    bar = "🟩" * filled + "⬛" * empty
-    percent = int(ratio * 100)
-    return f"{bar} {percent}%"
+# (format_time, format_time_precise, and generate_progress_bar are imported directly from utils.py)
 
 
 def get_rank_emblem(hours: float) -> str:
@@ -752,36 +684,44 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
 
 async def update_leaderboard_embed(mode: str = "alltime"):
     """Updates or creates the persistent leaderboard message."""
-    global current_view_mode
-    current_view_mode = mode
+    bot.current_view_mode = mode
     try:
+        data = await load_data()
+        db_changed = False
+        for uid, udata in data.get("users", {}).items():
+            if enforce_user_resets(udata):
+                db_changed = True
+        if db_changed:
+            async with bot.db_write_lock:
+                data = await load_data()
+                db_changed_lock = False
+                for uid, udata in data.get("users", {}).items():
+                    if enforce_user_resets(udata):
+                        db_changed_lock = True
+                if db_changed_lock:
+                    await save_data(data)
+
+        embed = build_leaderboard_embed(data, mode)
+        view = LeaderboardView(mode)
+
+        channel = await get_or_fetch_channel(LEADERBOARD_CHANNEL_ID)
+        if channel is None:
+            logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
+            return
+
+        msg_id = data["meta"].get("leaderboard_message_id")
+
+        if msg_id is not None:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.edit(embed=embed, view=view)
+                return
+            except (discord.NotFound, discord.HTTPException):
+                logging.warning("Previous leaderboard message not found. Sending new one.")
+
+        msg = await channel.send(embed=embed, view=view)
         async with bot.db_write_lock:
             data = await load_data()
-            channel = await get_or_fetch_channel(LEADERBOARD_CHANNEL_ID)
-            if channel is None:
-                logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
-                return
-
-            db_changed = False
-            for uid, udata in data.get("users", {}).items():
-                if enforce_user_resets(udata):
-                    db_changed = True
-
-            embed = build_leaderboard_embed(data, mode)
-            view = LeaderboardView(mode)
-            msg_id = data["meta"].get("leaderboard_message_id")
-
-            if msg_id is not None:
-                try:
-                    msg = await channel.fetch_message(msg_id)
-                    await msg.edit(embed=embed, view=view)
-                    if db_changed:
-                        await save_data(data)
-                    return
-                except (discord.NotFound, discord.HTTPException):
-                    logging.warning("Previous leaderboard message not found. Sending new one.")
-
-            msg = await channel.send(embed=embed, view=view)
             data["meta"]["leaderboard_message_id"] = msg.id
             await save_data(data)
     except Exception as e:
@@ -815,15 +755,15 @@ class LeaderboardView(discord.ui.View):
     async def daily_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._switch_mode(interaction, "daily")
 
-    @discord.ui.button(label="❓ Doubts", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_doubt", row=0)
+    @discord.ui.button(label="❓ Doubts", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_doubt", row=1)
     async def doubt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._switch_mode(interaction, "doubt")
 
-    @discord.ui.button(label="💬 Messages", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_messages", row=0)
+    @discord.ui.button(label="💬 Messages", style=discord.ButtonStyle.secondary, custom_id="ypt_btn_messages", row=1)
     async def messages_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._switch_mode(interaction, "messages")
 
-    @discord.ui.button(label="🔄 Refresh Stats", style=discord.ButtonStyle.primary, custom_id="ypt_btn_refresh", row=1)
+    @discord.ui.button(label="🔄 Refresh Stats", style=discord.ButtonStyle.success, custom_id="ypt_btn_refresh", row=1)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Refreshes the leaderboard stats in-place."""
         try:
@@ -841,8 +781,26 @@ class LeaderboardView(discord.ui.View):
     async def _switch_mode(self, interaction: discord.Interaction, mode: str):
         try:
             self.current_mode = mode
-            await interaction.response.defer()
-            await update_leaderboard_embed(mode)
+            data = await load_data()
+            db_changed = False
+            for uid, udata in data.get("users", {}).items():
+                if enforce_user_resets(udata):
+                    db_changed = True
+            if db_changed:
+                async with bot.db_write_lock:
+                    data = await load_data()
+                    db_changed_lock = False
+                    for uid, udata in data.get("users", {}).items():
+                        if enforce_user_resets(udata):
+                            db_changed_lock = True
+                    if db_changed_lock:
+                        await save_data(data)
+                
+            embed = build_leaderboard_embed(data, mode)
+            view = LeaderboardView(mode)
+                
+            # Edit the message directly using the interaction response to complete it
+            await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
             logging.error(f"Switch mode error: {e}")
 
@@ -851,7 +809,7 @@ class LeaderboardView(discord.ui.View):
 # SECTION 6: SESSION LOG EMBED
 # ============================================================
 
-async def send_session_log(member: discord.Member, session_seconds: int, data: dict):
+async def send_session_log(member: discord.Member, session_seconds: int, data: dict, is_new_pb: bool = False):
     """Sends a detailed session completion embed to the log channel."""
     try:
         channel = await get_or_fetch_channel(LOG_CHANNEL_ID)
@@ -914,8 +872,8 @@ async def send_session_log(member: discord.Member, session_seconds: int, data: d
             inline=False,
         )
 
-        # Check if this session was a new personal best
-        if session_seconds == longest_session and session_count > 0:
+        # Check if this session was a new personal best (passed from caller)
+        if is_new_pb:
             embed.add_field(
                 name="🎯 NEW PERSONAL BEST!",
                 value=f"Longest session ever: **{format_time_precise(session_seconds)}** 🔥",
@@ -962,7 +920,9 @@ class SubjectTagView(discord.ui.View):
             tag = select.values[0]
             async with bot.db_write_lock:
                 data = await load_data()
-                udata = data["users"].get(self.user_id, {})
+                udata = data["users"].get(self.user_id)
+                if udata is None:
+                    udata = ensure_user(data, interaction.user)
                 # Track subject hours
                 if "subject_hours" not in udata:
                     udata["subject_hours"] = {}
@@ -1141,11 +1101,15 @@ async def update_voice_channel_status(channel: discord.VoiceChannel, active_memb
         }
         payload = {"status": status_text}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.put(url, headers=headers, json=payload) as resp:
-                if resp.status not in (200, 204):
-                    body = await resp.text()
-                    logging.warning(f"Voice status update returned {resp.status}: {body}")
+        # Reuse the shared aiohttp session (created in on_ready)
+        session = bot._http_session
+        if session is None or session.closed:
+            bot._http_session = aiohttp.ClientSession()
+            session = bot._http_session
+        async with session.put(url, headers=headers, json=payload) as resp:
+            if resp.status not in (200, 204):
+                body = await resp.text()
+                logging.warning(f"Voice status update returned {resp.status}: {body}")
     except Exception as e:
         logging.error(f"Failed to update voice channel status: {e}")
 
@@ -1183,7 +1147,6 @@ async def flush_message_buffer_loop():
                 if not bot._message_buffer:
                     continue
                 buffer_copy = bot._message_buffer.copy()
-                bot._message_buffer.clear()
 
             async with bot.db_write_lock:
                 data = await load_data()
@@ -1195,17 +1158,20 @@ async def flush_message_buffer_loop():
                             if member:
                                 username = member.display_name
                                 break
-                        data["users"][uid_str] = {
-                            "username": username,
-                            "total_messages": 0,
-                            "messages_today": 0,
-                            "messages_weekly": 0,
-                        }
+                        data["users"][uid_str] = _default_user(username)
                     udata = data["users"][uid_str]
                     udata["total_messages"] = udata.get("total_messages", 0) + increment
                     udata["messages_today"] = udata.get("messages_today", 0) + increment
                     udata["messages_weekly"] = udata.get("messages_weekly", 0) + increment
                 await save_data(data)
+
+            # Successfully saved! Now clear only the keys/counts we just flushed
+            async with bot._message_buffer_lock:
+                for uid_str, increment in buffer_copy.items():
+                    if uid_str in bot._message_buffer:
+                        bot._message_buffer[uid_str] -= increment
+                        if bot._message_buffer[uid_str] <= 0:
+                            del bot._message_buffer[uid_str]
 
             # Check milestones for active users
             for uid_str in buffer_copy.keys():
@@ -1341,49 +1307,65 @@ async def check_weekly_reset(data: dict):
             winner_seconds = 0
             winner_name = "Unknown"
             
-            async with bot.db_write_lock:
-                data = await load_data()
-                if "meta" not in data:
-                    data["meta"] = {}
-                meta = data["meta"]
+            data = await load_data()
+            if "meta" not in data:
+                data["meta"] = {}
+            meta = data["meta"]
 
-                # Check Daily Reset
-                last_daily = meta.get("last_daily_reset")
-                if last_daily != today_str:
-                    for uid, udata in data.get("users", {}).items():
-                        enforce_user_resets(udata)
-                    meta["last_daily_reset"] = today_str
-                    changed = True
-                    logging.info(f"Global daily reset performed for {today_str}.")
+            # Read-only check to see if daily or weekly reset is needed
+            last_daily = meta.get("last_daily_reset")
+            need_daily = last_daily != today_str
+            need_weekly = False
+            if today.weekday() == WEEKLY_RESET_DAY:
+                last_weekly = meta.get("last_weekly_reset")
+                if last_weekly != today_str:
+                    need_weekly = True
 
-                # Check Weekly Reset (Monday)
-                if today.weekday() == WEEKLY_RESET_DAY:
-                    last_weekly = meta.get("last_weekly_reset")
-                    if last_weekly != today_str:
-                        # Find this week's winner BEFORE resetting
-                        for uid, udata in data.get("users", {}).items():
-                            if udata.get("last_weekly_reset") == today_str:
-                                weekly = udata.get("last_week_total_seconds", 0)
-                            else:
-                                weekly = udata.get("total_seconds_weekly", 0)
+            if need_daily or need_weekly:
+                async with bot.db_write_lock:
+                    data = await load_data()
+                    if "meta" not in data:
+                        data["meta"] = {}
+                    meta = data["meta"]
 
-                            if weekly > winner_seconds:
-                                winner_seconds = weekly
-                                winner_uid = uid
-                                winner_name = udata.get("username", "Unknown")
-
-                        # Run enforce_user_resets on all users
+                    # Re-check daily reset inside lock
+                    last_daily = meta.get("last_daily_reset")
+                    if last_daily != today_str:
                         for uid, udata in data.get("users", {}).items():
                             enforce_user_resets(udata)
-
-                        meta["last_weekly_reset"] = today_str
+                        meta["last_daily_reset"] = today_str
                         changed = True
-                        do_weekly_announcement = True
-                        logging.info(f"Global weekly reset performed for {today_str}.")
-                
-                if changed:
-                    await save_data(data)
-                    await update_leaderboard_embed("alltime")
+                        logging.info(f"Global daily reset performed for {today_str}.")
+
+                    # Re-check weekly reset inside lock
+                    if today.weekday() == WEEKLY_RESET_DAY:
+                        last_weekly = meta.get("last_weekly_reset")
+                        if last_weekly != today_str:
+                            for uid, udata in data.get("users", {}).items():
+                                if udata.get("last_weekly_reset") == today_str:
+                                    weekly = udata.get("last_week_total_seconds", 0)
+                                else:
+                                    weekly = udata.get("total_seconds_weekly", 0)
+
+                                if weekly > winner_seconds:
+                                    winner_seconds = weekly
+                                    winner_uid = uid
+                                    winner_name = udata.get("username", "Unknown")
+
+                            for uid, udata in data.get("users", {}).items():
+                                enforce_user_resets(udata)
+
+                            meta["last_weekly_reset"] = today_str
+                            changed = True
+                            do_weekly_announcement = True
+                            logging.info(f"Global weekly reset performed for {today_str}.")
+                    
+                    if changed:
+                        await save_data(data)
+
+            # Update leaderboard OUTSIDE the lock to avoid deadlock
+            if changed:
+                await update_leaderboard_embed("alltime")
 
             if do_weekly_announcement and winner_uid is not None and winner_seconds > 0:
                 try:
@@ -1626,6 +1608,20 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
         if ch_type == "untracked":
             return
 
+        # Track variables for post-lock work
+        _do_pomo_log = False
+        _do_study_log = False
+        _do_doubt_log = False
+        _do_discussion_log = False
+        _is_new_pb = False
+        _study_secs = 0
+        _break_secs = 0
+        _total_time_in_channel = 0
+        _session_seconds = 0
+        _udata_copy = {}
+        _needs_status_update = False
+        _needs_presence_update = False
+
         async with bot.db_write_lock:
             data = await load_data()
             uid = str(member.id)
@@ -1634,179 +1630,199 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             start_ts = udata.get("session_start_timestamp")
             if start_ts is None:
                 log_warning("SESSION END", "left but had no active session", member)
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                return
+                _needs_status_update = True
+            else:
+                session_seconds = int(time.time()) - start_ts
+                _session_seconds = session_seconds
 
-            session_seconds = int(time.time()) - start_ts
-
-            if session_seconds < MIN_SESSION_SECONDS:
-                log_info("SESSION DISCARD", f"{session_seconds}s (below {MIN_SESSION_SECONDS}s minimum)", member)
-                udata["session_start_timestamp"] = None
-                udata["session_channel_id"] = None
-                await save_data(data)
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
-                return
-
-            real_start_ts = start_ts  # Save BEFORE clearing
-            udata["session_start_timestamp"] = None
-            udata["session_channel_id"] = None
-
-            if channel.id == POMODORO_CHANNEL_ID:
-                # --- GROUP POMODORO: calculate study time excluding breaks ---
-                study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
-
-                if study_secs >= MIN_SESSION_SECONDS:
-                    udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
-                    udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
-                    udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
-                    udata["session_count"] = udata.get("session_count", 0) + 1
-
-                    if study_secs > udata.get("longest_session_seconds", 0):
-                        udata["longest_session_seconds"] = study_secs
-                    if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                        udata["best_day_seconds"] = udata["total_seconds_today"]
-
-                    # Record daily history for heatmap
-                    today_str = get_ist_date().isoformat()
-                    if "daily_history" not in udata:
-                        udata["daily_history"] = {}
-                    udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
-
-                    update_streak(udata)
+                if session_seconds < MIN_SESSION_SECONDS:
+                    log_info("SESSION DISCARD", f"{session_seconds}s (below {MIN_SESSION_SECONDS}s minimum)", member)
+                    udata["session_start_timestamp"] = None
+                    udata["session_channel_id"] = None
                     await save_data(data)
-
-                    total_time_in_channel = int(time.time()) - real_start_ts
-                    break_secs = total_time_in_channel - study_secs
-
-                    log_info("POMODORO END", f"{format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}", member)
-
-                    await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
-                    await check_and_award_milestones(member, data)
-                    await update_leaderboard_embed(current_view_mode)
+                    _needs_status_update = True
+                    _needs_presence_update = True
                 else:
-                    log_info("POMODORO DISCARD", f"{study_secs}s study (below minimum)", member)
-                    await save_data(data)
+                    real_start_ts = start_ts  # Save BEFORE clearing
+                    udata["session_start_timestamp"] = None
+                    udata["session_channel_id"] = None
 
-                # Keep status updates handled by the background status loop for Group Pomodoro
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
-            elif ch_type == "study":
-                # --- STUDY SESSION: full tracking ---
-                udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
-                udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
-                udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
-                udata["session_count"] = udata.get("session_count", 0) + 1
+                    if channel.id == POMODORO_CHANNEL_ID:
+                        # --- GROUP POMODORO: calculate study time excluding breaks ---
+                        study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
 
-                if session_seconds > udata.get("longest_session_seconds", 0):
-                    udata["longest_session_seconds"] = session_seconds
-                if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
-                    udata["best_day_seconds"] = udata["total_seconds_today"]
+                        if study_secs >= MIN_SESSION_SECONDS:
+                            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + study_secs
+                            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + study_secs
+                            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + study_secs
+                            udata["session_count"] = udata.get("session_count", 0) + 1
 
-                # Record daily history for heatmap
-                today_str = get_ist_date().isoformat()
-                if "daily_history" not in udata:
-                    udata["daily_history"] = {}
-                udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+                            if study_secs > udata.get("longest_session_seconds", 0):
+                                udata["longest_session_seconds"] = study_secs
+                            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                                udata["best_day_seconds"] = udata["total_seconds_today"]
 
-                update_streak(udata)
-                await save_data(data)
+                            # Record daily history for heatmap
+                            today_str = get_ist_date().isoformat()
+                            if "daily_history" not in udata:
+                                udata["daily_history"] = {}
+                            udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
 
-                log_info("STUDY END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
+                            update_streak(udata)
+                            await save_data(data)
 
-                await send_session_log(member, session_seconds, data)
-                await check_and_award_milestones(member, data)
-                await update_leaderboard_embed(current_view_mode)
+                            _total_time_in_channel = int(time.time()) - real_start_ts
+                            _break_secs = _total_time_in_channel - study_secs
+                            _study_secs = study_secs
+                            _do_pomo_log = True
+                        else:
+                            log_info("POMODORO DISCARD", f"{study_secs}s study (below minimum)", member)
+                            await save_data(data)
 
-                # Post-leave DM based on session length
-                try:
-                    session_minutes = session_seconds // 60
-                    today_hours = udata.get('total_seconds_today', 0) / 3600
-                    ist_now = get_ist_now()
+                    elif ch_type == "study":
+                        # --- STUDY SESSION: full tracking ---
+                        # Capture old PB BEFORE updating for new-PB detection in session log
+                        old_longest_session = udata.get("longest_session_seconds", 0)
+                        _is_new_pb = session_seconds > old_longest_session
 
-                    if session_minutes < 30:
-                        # Short session — come back nudge
-                        msg = discord.Embed(
-                            title="💨 Short Session Detected",
-                            description=f"Only **{session_minutes}m** this session. Breaks are fine — but come back within **10 minutes** and keep the momentum going!",
-                            color=0xFFA500
-                        )
-                        msg.add_field(name="⏱️ Session Length", value=f"{session_minutes}m", inline=True)
-                        msg.add_field(name="📊 Today's Total", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="💡 Tip", value="Even 25-minute Pomodoro sessions add up massively over a day!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • Come back soon!")
-                    elif today_hours >= 6.0:
-                        # Champion territory
-                        msg = discord.Embed(
-                            title="🏆 Outstanding Session!",
-                            description=f"**{session_seconds//3600:.0f}h {(session_seconds%3600)//60:.0f}m** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
-                            color=0xFFD700
-                        )
-                        msg.add_field(name="🔥 Today's Total", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="🎯 JEE Target", value="6h+ ✅", inline=True)
-                        msg.add_field(name="💬 Reality Check", value="Top rankers put in days like this consistently. You're building the habit. Keep it up!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • You're on the right track!")
-                    elif today_hours >= 3.0:
-                        # Good but need more
-                        msg = discord.Embed(
-                            title="✅ Good Session! Keep It Going",
-                            description=f"**{session_seconds//3600:.0f}h {(session_seconds%3600)//60:.0f}m** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
-                            color=0x57F287
-                        )
-                        msg.add_field(name="📊 Today So Far", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="🎯 6h Target", value=f"{6-today_hours:.1f}h remaining", inline=True)
-                        msg.add_field(name="⚡ Don't Stop", value="The gap between good and great is that extra session. Come back in 15 minutes!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • Push for 6h!")
-                    else:
-                        # Under 3h — needs to come back urgently
-                        msg = discord.Embed(
-                            title="⚡ Come Back Soon!",
-                            description=f"**{session_seconds//3600:.0f}h {(session_seconds%3600)//60:.0f}m** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
-                            color=0xEB459E
-                        )
-                        msg.add_field(name="📊 Today", value=f"{today_hours:.1f}h / 6h target", inline=True)
-                        msg.add_field(name="⏰ Remaining", value=f"{6-today_hours:.1f}h needed", inline=True)
-                        msg.set_footer(text="YPT Study Bot • Take a short break and return!")
+                        udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
+                        udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
+                        udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
+                        udata["session_count"] = udata.get("session_count", 0) + 1
 
-                    dm_user = bot.get_user(member.id) or await bot.fetch_user(member.id)
-                    if dm_user:
-                        await dm_user.send(embed=msg)
-                except Exception as dm_err:
-                    logging.warning(f"Could not send post-leave DM to {member.display_name}: {dm_err}")
+                        if _is_new_pb:
+                            udata["longest_session_seconds"] = session_seconds
+                        if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                            udata["best_day_seconds"] = udata["total_seconds_today"]
 
+                        # Record daily history for heatmap
+                        today_str = get_ist_date().isoformat()
+                        if "daily_history" not in udata:
+                            udata["daily_history"] = {}
+                        udata["daily_history"][today_str] = udata.get("total_seconds_today", 0)
+
+                        update_streak(udata)
+                        await save_data(data)
+                        _do_study_log = True
+
+                    elif ch_type == "doubt":
+                        # --- DOUBT SESSION: tracked separately, no milestones ---
+                        udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
+                        udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
+                        udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
+                        await save_data(data)
+                        _do_doubt_log = True
+
+                    elif ch_type == "discussion":
+                        # --- DISCUSSION SESSION: log only, no achievements ---
+                        udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
+                        udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
+                        await save_data(data)
+                        _do_discussion_log = True
+
+            # Snapshot copy of udata for DM/logging outside the lock
+            if uid in data["users"]:
+                _udata_copy = data["users"][uid].copy()
+
+        # --- All Discord API work happens OUTSIDE the lock to avoid deadlocks ---
+        if _needs_status_update:
+            if channel.id != POMODORO_CHANNEL_ID:
                 await update_voice_channel_status(channel, None)
+            if _needs_presence_update:
                 await update_bot_presence(data)
+            return
 
-            elif ch_type == "doubt":
-                # --- DOUBT SESSION: tracked separately, no milestones ---
-                udata["total_seconds_doubt"] = udata.get("total_seconds_doubt", 0) + session_seconds
-                udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
-                udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
-                await save_data(data)
+        if _do_pomo_log:
+            log_info("POMODORO END", f"{format_time_precise(_study_secs)} study ({format_time_precise(_break_secs)} break) in #{channel.name}", member)
+            await send_pomodoro_session_log(member, _study_secs, _break_secs, _total_time_in_channel, data)
+            await check_and_award_milestones(member, data)
+            bot.dispatch("study_session_ended", member, _study_secs)
+            await update_leaderboard_embed(bot.current_view_mode)
 
-                log_info("DOUBT END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
-
-                await send_doubt_log(member, session_seconds, data, channel)
-                await check_and_award_doubt_milestones(member, data)
-
+        if channel.id == POMODORO_CHANNEL_ID:
+            # Keep status updates handled by the background status loop for Group Pomodoro
+            if channel.id != POMODORO_CHANNEL_ID:
                 await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
+            await update_bot_presence(data)
 
-            elif ch_type == "discussion":
-                # --- DISCUSSION SESSION: log only, no achievements ---
-                udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
-                udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
-                await save_data(data)
+        if _do_study_log:
+            log_info("STUDY END", f"{format_time_precise(_session_seconds)} in #{channel.name}", member)
+            await send_session_log(member, _session_seconds, data, is_new_pb=_is_new_pb)
+            await check_and_award_milestones(member, data)
+            bot.dispatch("study_session_ended", member, _session_seconds)
+            await update_leaderboard_embed(bot.current_view_mode)
 
-                logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+            # Post-leave DM based on session length
+            try:
+                session_minutes = _session_seconds // 60
+                today_hours = _udata_copy.get('total_seconds_today', 0) / 3600
+                ist_now = get_ist_now()
 
-                await send_discussion_log(member, session_seconds, data, channel)
+                if session_minutes < 30:
+                    # Short session — come back nudge
+                    msg = discord.Embed(
+                        title="💨 Short Session Detected",
+                        description=f"Only **{session_minutes}m** this session. Breaks are fine — but come back within **10 minutes** and keep the momentum going!",
+                        color=0xFFA500
+                    )
+                    msg.add_field(name="⏱️ Session Length", value=f"{session_minutes}m", inline=True)
+                    msg.add_field(name="📊 Today's Total", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="💡 Tip", value="Even 25-minute Pomodoro sessions add up massively over a day!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • Come back soon!")
+                elif today_hours >= 6.0:
+                    # Champion territory
+                    msg = discord.Embed(
+                        title="🏆 Outstanding Session!",
+                        description=f"**{format_time_precise(_session_seconds)}** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
+                        color=0xFFD700
+                    )
+                    msg.add_field(name="🔥 Today's Total", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="🎯 JEE Target", value="6h+ ✅", inline=True)
+                    msg.add_field(name="💬 Reality Check", value="Top rankers put in days like this consistently. You're building the habit. Keep it up!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • You're on the right track!")
+                elif today_hours >= 3.0:
+                    # Good but need more
+                    msg = discord.Embed(
+                        title="✅ Good Session! Keep It Going",
+                        description=f"**{format_time_precise(_session_seconds)}** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
+                        color=0x57F287
+                    )
+                    msg.add_field(name="📊 Today So Far", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="🎯 6h Target", value=f"{6-today_hours:.1f}h remaining", inline=True)
+                    msg.add_field(name="⚡ Don't Stop", value="The gap between good and great is that extra session. Come back in 15 minutes!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • Push for 6h!")
+                else:
+                    # Under 3h — needs to come back urgently
+                    msg = discord.Embed(
+                        title="⚡ Come Back Soon!",
+                        description=f"**{format_time_precise(_session_seconds)}** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
+                        color=0xEB459E
+                    )
+                    msg.add_field(name="📊 Today", value=f"{today_hours:.1f}h / 6h target", inline=True)
+                    msg.add_field(name="⏰ Remaining", value=f"{6-today_hours:.1f}h needed", inline=True)
+                    msg.set_footer(text="YPT Study Bot • Take a short break and return!")
 
-                await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
+                dm_user = bot.get_user(member.id) or await bot.fetch_user(member.id)
+                if dm_user:
+                    await dm_user.send(embed=msg)
+            except Exception as dm_err:
+                logging.warning(f"Could not send post-leave DM to {member.display_name}: {dm_err}")
+
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
+
+        if _do_doubt_log:
+            log_info("DOUBT END", f"{format_time_precise(_session_seconds)} in #{channel.name}", member)
+            await send_doubt_log(member, _session_seconds, data, channel)
+            await check_and_award_doubt_milestones(member, data)
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
+
+        if _do_discussion_log:
+            logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(_session_seconds)} in #{channel.name}")
+            await send_discussion_log(member, _session_seconds, data, channel)
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
     except Exception as e:
         logging.error(f"Error handling voice leave for {member.display_name}: {e}")
 
@@ -1879,12 +1895,20 @@ async def pomodoro_status_loop():
                     "Authorization": f"Bot {os.getenv('BOT_TOKEN')}",
                     "Content-Type": "application/json",
                 }
-                async with aiohttp.ClientSession() as session:
+                session = bot._http_session
+                is_local_session = False
+                if session is None or session.closed:
+                    session = aiohttp.ClientSession()
+                    is_local_session = True
+                try:
                     await session.put(
                         f"https://discord.com/api/v10/channels/{POMODORO_CHANNEL_ID}/voice-status",
                         headers=headers,
                         json={"status": status_text},
                     )
+                finally:
+                    if is_local_session:
+                        await session.close()
             except Exception as e:
                 logging.debug(f"Could not update pomodoro channel status: {e}")
 
@@ -2037,6 +2061,37 @@ async def individual_pomodoro_loop(user_id: int):
                         except Exception:
                             pass
 
+                    # CREDIT STUDY TIME TO DATABASE
+                    async with bot.db_write_lock:
+                        data = await load_data()
+                        if member:
+                            udata = ensure_user(data, member)
+                            udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + total_study
+                            udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + total_study
+                            udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + total_study
+                            udata["session_count"] = udata.get("session_count", 0) + 1
+                            
+                            old_longest = udata.get("longest_session_seconds", 0)
+                            if total_study > old_longest:
+                                udata["longest_session_seconds"] = total_study
+                                
+                            if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
+                                udata["best_day_seconds"] = udata["total_seconds_today"]
+                                
+                            today_str = get_ist_date().isoformat()
+                            if "daily_history" not in udata:
+                                udata["daily_history"] = {}
+                            udata["daily_history"][today_str] = udata["total_seconds_today"]
+                            
+                            update_streak(udata)
+                            await save_data(data)
+
+                    if member:
+                        await check_and_award_milestones(member, data)
+                        bot.dispatch("study_session_ended", member, total_study)
+                        await update_leaderboard_embed(bot.current_view_mode)
+                        await update_bot_presence(data)
+
                     if member:
                         log_ch = await get_or_fetch_channel(LOG_CHANNEL_ID)
                         if log_ch:
@@ -2073,24 +2128,24 @@ async def weekly_graph_dm_loop():
     while not bot.is_closed():
         try:
             now_ist = get_ist_now()
-            if now_ist.weekday() == 6 and now_ist.hour >= 21:
-                today_str = now_ist.date().isoformat()
+            
+            # Find the most recent Sunday
+            days_since_sunday = (now_ist.weekday() + 1) % 7
+            prev_sunday_date = now_ist.date() - datetime.timedelta(days=days_since_sunday)
+            prev_sunday_9pm = datetime.datetime.combine(prev_sunday_date, datetime.time(21, 0), tzinfo=IST_TZ)
+            
+            if now_ist >= prev_sunday_9pm:
+                data = await load_data()
+                meta = data.setdefault("meta", {})
+                last_send = meta.get("last_weekly_graph_send")
                 
-                async with bot.db_write_lock:
-                    data = await load_data()
-                    if "meta" not in data:
-                        data["meta"] = {}
-                    last_send = data["meta"].get("last_weekly_graph_send")
-                    
-                if last_send != today_str:
-                    logging.info("[WEEKLY GRAPH] Sunday 9 PM IST reached. Generating and sending weekly study graphs...")
+                if last_send != prev_sunday_date.isoformat():
+                    logging.info(f"[WEEKLY GRAPH] Sunday 9 PM IST reached (or passed). Sending weekly graphs for {prev_sunday_date.isoformat()}...")
                     await send_weekly_graphs()
                     
                     async with bot.db_write_lock:
                         data = await load_data()
-                        if "meta" not in data:
-                            data["meta"] = {}
-                        data["meta"]["last_weekly_graph_send"] = today_str
+                        data.setdefault("meta", {})["last_weekly_graph_send"] = prev_sunday_date.isoformat()
                         await save_data(data)
                     logging.info("[WEEKLY GRAPH] Weekly study graphs sent successfully.")
         except Exception as e:
@@ -2101,24 +2156,11 @@ async def weekly_graph_dm_loop():
 
 async def send_weekly_graphs():
     """Generates and sends a study graph to each tracked user via DM."""
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        from matplotlib.figure import Figure
-        from io import BytesIO
-    except ImportError:
-        logging.error("matplotlib not installed. Cannot generate weekly graphs.")
-        return
-
     data = await load_data()
     today = get_ist_date()
 
     # Get the last 7 days
-    days = []
-    for i in range(6, -1, -1):
-        days.append(today - datetime.timedelta(days=i))
-
-    day_labels = [d.strftime("%a\n%d") for d in days]
+    days = [today - datetime.timedelta(days=i) for i in range(6, -1, -1)]
     day_strs = [d.isoformat() for d in days]
 
     for uid, udata in data.get("users", {}).items():
@@ -2140,82 +2182,25 @@ async def send_weekly_graphs():
             if total_week == 0:
                 continue  # Skip users with no activity this week
 
-            # Generate the graph
-            fig = Figure(figsize=(8, 4))
-            fig.patch.set_facecolor('#2B2D31')
-            ax = fig.subplots()
-            ax.set_facecolor('#1E1F22')
-
-            # Bar colors: gradient from dim to bright based on hours
-            colors = []
-            for h in hours:
-                if h >= 3:
-                    colors.append('#57F287')  # Green (intense)
-                elif h >= 1:
-                    colors.append('#5865F2')  # Blurple (good)
-                elif h > 0:
-                    colors.append('#FEE75C')  # Yellow (light)
-                else:
-                    colors.append('#4F545C')  # Gray (none)
-
-            bars = ax.bar(day_labels, hours, color=colors, width=0.6, edgecolor='none', zorder=3)
-
-            # Add hour labels on top of bars
-            for bar, h in zip(bars, hours):
-                if h > 0:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + 0.1,
-                        f"{h:.1f}h",
-                        ha='center', va='bottom',
-                        color='white', fontsize=10, fontweight='bold',
-                    )
-
-            ax.set_ylabel('Hours', color='white', fontsize=12)
-            ax.set_title(
-                f"{udata.get('username', 'User')}'s Weekly Study Report",
-                color='white', fontsize=14, fontweight='bold', pad=15,
-            )
-
-            # Style axes
-            ax.tick_params(colors='white', labelsize=10)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.spines['left'].set_color('#4F545C')
-            ax.spines['bottom'].set_color('#4F545C')
-            ax.yaxis.grid(True, color='#4F545C', alpha=0.3, zorder=0)
-
-            # Add total label
-            avg_daily = total_week / 7
-            ax.text(
-                0.98, 0.95,
-                f"Total: {total_week:.1f}h | Avg: {avg_daily:.1f}h/day",
-                transform=ax.transAxes, ha='right', va='top',
-                color='#B5BAC1', fontsize=10,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='#1E1F22', edgecolor='#4F545C', alpha=0.8),
-            )
-
-            fig.tight_layout()
-
-            # Save to buffer
-            buf = BytesIO()
-            fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-            buf.seek(0)
+            # Call modern matplotlib generator in background thread to avoid event loop blocking
+            from utils import generate_weekly_chart
+            username = udata.get('username', 'User')
+            buf = await asyncio.to_thread(generate_weekly_chart, username, days, hours)
 
             # Send DM
             embed = discord.Embed(
-                title="\U0001f4ca Weekly Study Report",
+                title="📊 Weekly Study Report",
                 description=(
                     f"Here's your study breakdown for the past week!\n\n"
-                    f"\U0001f4da Total: **{total_week:.1f} hours**\n"
-                    f"\U0001f4c5 Best day: **{max(hours):.1f}h**\n"
-                    f"\U0001f525 Study days: **{sum(1 for h in hours if h > 0)}/7**"
+                    f"📚 Total: **{total_week:.1f} hours**\n"
+                    f"📅 Best day: **{max(hours):.1f}h**\n"
+                    f"🔥 Study days: **{sum(1 for h in hours if h > 0)}/7**"
                 ),
                 color=USER_COLORS.get(int(uid), DEFAULT_COLOR),
                 timestamp=datetime.datetime.now(datetime.UTC),
             )
             embed.set_image(url="attachment://weekly_graph.png")
-            embed.set_footer(text="New week, new grind. Let's go! \U0001f4aa")
+            embed.set_footer(text="New week, new grind. Let's go! 💪")
 
             file = discord.File(buf, filename="weekly_graph.png")
             await user.send(embed=embed, file=file)
@@ -2312,60 +2297,68 @@ async def on_ready():
                 if not member.bot:
                     active_member_vc[str(member.id)] = vc
 
-    # Load data and check active and orphaned sessions (crash recovery)
-    data = await load_data()
+    # Load data and check active and orphaned sessions (crash recovery) under write lock
+    async with bot.db_write_lock:
+        data = await load_data()
 
-    # Ensure all server members (excluding bots) are registered in the database
-    for guild in bot.guilds:
-        for member in guild.members:
-            if not member.bot:
-                ensure_user(data, member)
+        # Ensure all server members (excluding bots) are registered in the database
+        for guild in bot.guilds:
+            for member in guild.members:
+                if not member.bot:
+                    ensure_user(data, member)
 
-    now_ts = int(time.time())
-    for uid, udata in list(data.get("users", {}).items()):
-        is_active = uid in active_member_vc
-        has_session = udata.get("session_start_timestamp") is not None
-        
-        if has_session and not is_active:
-            # Orphaned session - user left while bot was offline
-            username = udata.get("username", uid)
-            logging.warning(
-                f"[CRASH RECOVERY] Found orphaned session for {username} "
-                f"(started at {udata['session_start_timestamp']}). Clearing."
-            )
-            udata["session_start_timestamp"] = None
-            udata["session_channel_id"] = None
-        elif is_active and not has_session:
-            # User is in channel but has no session (e.g. joined while bot was offline)
-            current_vc = active_member_vc[uid]
-            ch_type = get_channel_type(current_vc.id)
-            if ch_type != "untracked":
+        # Ensure all currently active voice members are also registered
+        for uid_str, vc in active_member_vc.items():
+            if uid_str not in data["users"]:
+                member = vc.guild.get_member(int(uid_str))
+                if member:
+                    ensure_user(data, member)
+
+        now_ts = int(time.time())
+        for uid, udata in list(data.get("users", {}).items()):
+            is_active = uid in active_member_vc
+            has_session = udata.get("session_start_timestamp") is not None
+            
+            if has_session and not is_active:
+                # Orphaned session - user left while bot was offline
                 username = udata.get("username", uid)
-                logging.info(
-                    f"[CRASH RECOVERY] User {username} is in #{current_vc.name} "
-                    f"but has no active session. Starting session now."
+                logging.warning(
+                    f"[CRASH RECOVERY] Found orphaned session for {username} "
+                    f"(started at {udata['session_start_timestamp']}). Clearing."
                 )
-                udata["session_start_timestamp"] = now_ts
-                udata["session_channel_id"] = current_vc.id
-        elif is_active and has_session:
-            # User is active and already has session start time
-            prev_channel_id = udata.get("session_channel_id")
-            current_vc = active_member_vc[uid]
-            if prev_channel_id == current_vc.id:
-                # Same channel, preserve!
-                logging.info(f"[CRASH RECOVERY] Preserving active session for {udata.get('username', uid)} in #{current_vc.name}")
-            else:
-                # Channel changed while bot was offline
+                udata["session_start_timestamp"] = None
+                udata["session_channel_id"] = None
+            elif is_active and not has_session:
+                # User is in channel but has no session (e.g. joined while bot was offline)
+                current_vc = active_member_vc[uid]
                 ch_type = get_channel_type(current_vc.id)
                 if ch_type != "untracked":
-                    logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} channel changed from {prev_channel_id} to #{current_vc.name} offline. Starting new session.")
+                    username = udata.get("username", uid)
+                    logging.info(
+                        f"[CRASH RECOVERY] User {username} is in #{current_vc.name} "
+                        f"but has no active session. Starting session now."
+                    )
                     udata["session_start_timestamp"] = now_ts
                     udata["session_channel_id"] = current_vc.id
+            elif is_active and has_session:
+                # User is active and already has session start time
+                prev_channel_id = udata.get("session_channel_id")
+                current_vc = active_member_vc[uid]
+                if prev_channel_id == current_vc.id:
+                    # Same channel, preserve!
+                    logging.info(f"[CRASH RECOVERY] Preserving active session for {udata.get('username', uid)} in #{current_vc.name}")
                 else:
-                    logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} moved to untracked channel #{current_vc.name} offline. Clearing session.")
-                    udata["session_start_timestamp"] = None
-                    udata["session_channel_id"] = None
-    await save_data(data)
+                    # Channel changed while bot was offline
+                    ch_type = get_channel_type(current_vc.id)
+                    if ch_type != "untracked":
+                        logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} channel changed from {prev_channel_id} to #{current_vc.name} offline. Starting new session.")
+                        udata["session_start_timestamp"] = now_ts
+                        udata["session_channel_id"] = current_vc.id
+                    else:
+                        logging.warning(f"[CRASH RECOVERY] User {udata.get('username', uid)} moved to untracked channel #{current_vc.name} offline. Clearing session.")
+                        udata["session_start_timestamp"] = None
+                        udata["session_channel_id"] = None
+        await save_data(data)
 
     # Start background tasks
     global _bg_tasks_started
@@ -2376,7 +2369,11 @@ async def on_ready():
         asyncio.create_task(pomodoro_status_loop())
         asyncio.create_task(weekly_graph_dm_loop())
         asyncio.create_task(flush_message_buffer_loop())
-        asyncio.create_task(start_keepalive_server())
+        # Keepalive server is started in main() — don't start it again here
+
+    # Initialize shared aiohttp session for voice status updates etc.
+    if bot._http_session is None or bot._http_session.closed:
+        bot._http_session = aiohttp.ClientSession()
 
     # Restore persistent view for leaderboard buttons
     bot.add_view(LeaderboardView("alltime"))
@@ -2384,13 +2381,12 @@ async def on_ready():
     # Restore/create leaderboard embed
     await update_leaderboard_embed("alltime")
 
-    # Sync slash commands globally (once) — guild-specific copies cause duplicates
     try:
+        logging.info("Syncing application commands...")
         synced = await bot.tree.sync()
-        logging.info(f"Synced {len(synced)} global slash command(s) successfully.")
-    except Exception as e:
-        logging.error(f"Error during slash command synchronization: {e}", exc_info=True)
-
+        logging.info(f"Successfully synced {len(synced)} application commands globally.")
+    except Exception as sync_err:
+        logging.error(f"Failed to sync application commands: {sync_err}")
 
     logging.info("Bot ready. All systems operational.")
 
@@ -2410,34 +2406,89 @@ async def on_member_join(member: discord.Member):
                 data["users"][uid]["discipline_strikes"] = 0
             await save_data(data)
         logging.info(f"[MEMBER JOIN] Registered new member: {member.display_name} ({member.id})")
+
+        udata = data.get("users", {}).get(uid, {})
+        if udata.get("puzzle_kicks", 0) > 0:
+            try:
+                unverified_role = discord.utils.get(member.guild.roles, name="Unverified")
+                if not unverified_role:
+                    unverified_role = await member.guild.create_role(
+                        name="Unverified",
+                        reason="For re-entry verification after being kicked",
+                        color=discord.Color.red()
+                    )
+                await member.add_roles(unverified_role)
+                logging.info(f"[MEMBER JOIN] Assigned Unverified role to {member.display_name}")
+            except Exception as role_err:
+                logging.warning(f"Could not apply Unverified role: {role_err}")
+
+            try:
+                await member.send(
+                    "⚠️ **Welcome back!** You were previously kicked for not solving the Puzzle of the Day.\n\n"
+                    "You must run the `/verify` command in the server to verify yourself and restore your access, or you will be kicked again at midnight!"
+                )
+            except discord.Forbidden:
+                pass
     except Exception as e:
         logging.error(f"Failed to register new member {member.display_name} on join: {e}")
 
 
-# ============================================================
-# SECTION 12: SLASH COMMANDS
-# ============================================================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(f"⏳ Cooldown! Please try again in {error.retry_after:.1f}s.", ephemeral=True)
+    elif isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You do not have the required permissions to run this command.", ephemeral=True)
+    else:
+        logging.error(f"App command error: {error}", exc_info=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("⚠️ An error occurred while executing this command.", ephemeral=True)
+            else:
+                await interaction.followup.send("⚠️ An error occurred while executing this command.", ephemeral=True)
+        except Exception:
+            pass
+
+@bot.tree.command(name="sync_commands", description="Syncs all application commands with Discord (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def sync_commands_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        synced = await bot.tree.sync()
+        for guild in bot.guilds:
+            try:
+                await bot.tree.sync(guild=guild)
+            except Exception:
+                pass
+        await interaction.followup.send(f"✅ Successfully synced {len(synced)} global commands!", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to sync: {e}", ephemeral=True)
 
 @bot.tree.command(name="stats", description="View detailed study statistics for yourself or another user.")
 @app_commands.describe(user="The user to view stats for (defaults to yourself)")
 async def stats_command(interaction: discord.Interaction, user: discord.Member | None = None):
     """Shows a detailed stats embed for the given user or the caller."""
     try:
+        await interaction.response.defer()
         target = user or interaction.user
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(target.id)
+        data = await load_data()
+        uid = str(target.id)
 
-            if uid not in data["users"]:
-                await interaction.response.send_message(
-                    f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
-                    ephemeral=True,
-                )
-                return
+        if uid not in data["users"]:
+            await interaction.followup.send(
+                f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
+                ephemeral=True,
+            )
+            return
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
-                await save_data(data)
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
         accent_color = USER_COLORS.get(target.id, DEFAULT_COLOR)
         total_hours = udata.get("total_seconds_alltime", 0) / 3600
         emblem = get_rank_emblem(total_hours)
@@ -2557,11 +2608,11 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
 
         embed.set_footer(text="Keep grinding. Every minute counts.")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Stats command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred fetching stats.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred fetching stats.", ephemeral=True)
         except discord.InteractionResponded:
             pass
 
@@ -2576,6 +2627,8 @@ async def goal_command(interaction: discord.Interaction, hours: float):
                 "❌ Please set a goal between 0 and 24 hours.", ephemeral=True
             )
             return
+
+        await interaction.response.defer(ephemeral=True)
 
         async with bot.db_write_lock:
             data = await load_data()
@@ -2601,11 +2654,11 @@ async def goal_command(interaction: discord.Interaction, hours: float):
             timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.set_footer(text="Consistency is key. 💪")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as e:
         logging.error(f"Goal command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred setting your goal.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred setting your goal.", ephemeral=True)
         except discord.InteractionResponded:
             pass
 
@@ -2615,7 +2668,7 @@ async def lb_command(interaction: discord.Interaction):
     """Triggers a manual leaderboard refresh."""
     try:
         await interaction.response.defer(ephemeral=True)
-        await update_leaderboard_embed(current_view_mode)
+        await update_leaderboard_embed(bot.current_view_mode)
         await interaction.followup.send("✅ Leaderboard refreshed!", ephemeral=True)
     except Exception as e:
         logging.error(f"Leaderboard command error: {e}")
@@ -2637,14 +2690,15 @@ async def lb_command(interaction: discord.Interaction):
 async def leaderboard_command(interaction: discord.Interaction, view: app_commands.Choice[str] | None = None):
     """Shows the leaderboard embed in the current channel."""
     try:
+        await interaction.response.defer()
         selected = view.value if view else "alltime"
         data = await load_data()
         embed = build_leaderboard_embed(data, selected)
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Leaderboard command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred showing the leaderboard.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred showing the leaderboard.", ephemeral=True)
         except discord.InteractionResponded:
             pass
 
@@ -2652,10 +2706,11 @@ async def leaderboard_command(interaction: discord.Interaction, view: app_comman
 @bot.tree.command(name="whostudying", description="See who's currently in a voice channel.")
 async def whostudying_command(interaction: discord.Interaction):
     """Shows who is currently in voice channels."""
+    await interaction.response.defer(ephemeral=False)
     try:
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+            await interaction.followup.send("❌ This command can only be used in a server.")
             return
 
         lines = []
@@ -2683,11 +2738,11 @@ async def whostudying_command(interaction: discord.Interaction):
             )
             embed.set_footer(text=f"{sum(len([m for m in vc.members if not m.bot]) for vc in guild.voice_channels)} people active")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Whostudying command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred.")
         except discord.InteractionResponded:
             pass
 
@@ -2697,28 +2752,34 @@ async def whostudying_command(interaction: discord.Interaction):
 async def compare_command(interaction: discord.Interaction, user: discord.Member):
     """Compares the caller's stats with another user side-by-side."""
     try:
+        await interaction.response.defer()
         caller = interaction.user
-        async with bot.db_write_lock:
-            data = await load_data()
-            caller_uid = str(caller.id)
-            target_uid = str(user.id)
+        data = await load_data()
+        caller_uid = str(caller.id)
+        target_uid = str(user.id)
 
-            if caller_uid not in data["users"] and target_uid not in data["users"]:
-                await interaction.response.send_message("📭 Neither of you have study data yet!", ephemeral=True)
-                return
+        if caller_uid not in data["users"] and target_uid not in data["users"]:
+            await interaction.followup.send("📭 Neither of you have study data yet!", ephemeral=True)
+            return
 
-            c_changed = False
-            t_changed = False
-            if caller_uid in data["users"]:
-                c_changed = enforce_user_resets(data["users"][caller_uid])
-            if target_uid in data["users"]:
-                t_changed = enforce_user_resets(data["users"][target_uid])
-
-            if c_changed or t_changed:
+        c_changed = False
+        t_changed = False
+        data = await load_data()
+        if caller_uid in data["users"]:
+            c_changed = enforce_user_resets(data["users"][caller_uid])
+        if target_uid in data["users"]:
+            t_changed = enforce_user_resets(data["users"][target_uid])
+        if c_changed or t_changed:
+            async with bot.db_write_lock:
+                data = await load_data()
+                if caller_uid in data["users"]:
+                    enforce_user_resets(data["users"][caller_uid])
+                if target_uid in data["users"]:
+                    enforce_user_resets(data["users"][target_uid])
                 await save_data(data)
 
-            c = data["users"].get(caller_uid, _default_user(caller.display_name))
-            t = data["users"].get(target_uid, _default_user(user.display_name))
+        c = data["users"].get(caller_uid, _default_user(caller.display_name))
+        t = data["users"].get(target_uid, _default_user(user.display_name))
 
         def indicator(a, b):
             if a > b:
@@ -2752,20 +2813,20 @@ async def compare_command(interaction: discord.Interaction, user: discord.Member
         )
         embed.set_footer(text="◀️ = left leads  |  ▶️ = right leads  |  🤝 = tied")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Compare command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred comparing stats.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred comparing stats.", ephemeral=True)
         except discord.InteractionResponded:
             pass
 
 
 @bot.tree.command(name="ping", description="Check if the bot is alive.")
 async def ping_command(interaction: discord.Interaction):
-    """Responds with the bot's latency."""
+    await interaction.response.defer(ephemeral=False)
     latency_ms = round(bot.latency * 1000)
-    await interaction.response.send_message(f"🏓 Pong! Latency: **{latency_ms}ms**")
+    await interaction.followup.send(f"🏓 Pong! Latency: **{latency_ms}ms**")
 
 
 # ============================================================
@@ -2780,29 +2841,26 @@ pomo_group = app_commands.Group(name="pomodoro", description="Pomodoro timer com
     break_min="Break duration in minutes (default: 5)",
 )
 async def pomo_start(interaction: discord.Interaction, study_min: int = 25, break_min: int = 5):
-    """Starts an individual pomodoro for the user."""
+    await interaction.response.defer(ephemeral=True)
     try:
         uid = interaction.user.id
         
         # Force the user to be in one of the study voice channels to start
         member = interaction.user
         if not (isinstance(member, discord.Member) and member.voice and member.voice.channel and member.voice.channel.id in STUDY_CHANNELS):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ You must be in one of the study voice channels (Study Room or Group Study) to start a personal Pomodoro!",
-                ephemeral=True,
             )
             return
         if uid in active_pomodoros:
-            await interaction.response.send_message(
-                "\u26a0\ufe0f You already have an active Pomodoro! Use `/pomodoro stop` first.",
-                ephemeral=True,
+            await interaction.followup.send(
+                "⚠️ You already have an active Pomodoro! Use `/pomodoro stop` first.",
             )
             return
 
         if study_min < 1 or study_min > 120 or break_min < 1 or break_min > 30:
-            await interaction.response.send_message(
-                "\u274c Study must be 1-120 min, break must be 1-30 min.",
-                ephemeral=True,
+            await interaction.followup.send(
+                "❌ Study must be 1-120 min, break must be 1-30 min.",
             )
             return
 
@@ -2829,25 +2887,24 @@ async def pomo_start(interaction: discord.Interaction, study_min: int = 25, brea
             color=0xED4245,
             timestamp=datetime.datetime.now(datetime.UTC),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Pomo start error: {e}")
         try:
-            await interaction.response.send_message("\u274c Error starting Pomodoro.", ephemeral=True)
+            await interaction.followup.send("❌ Error starting Pomodoro.")
         except discord.InteractionResponded:
             pass
 
 
 @pomo_group.command(name="stop", description="Stop your personal Pomodoro timer.")
 async def pomo_stop(interaction: discord.Interaction):
-    """Stops the user's individual pomodoro."""
+    await interaction.response.defer(ephemeral=True)
     try:
         uid = interaction.user.id
         pomo = active_pomodoros.get(uid)
         if pomo is None:
-            await interaction.response.send_message(
-                "\U0001f645 You don't have an active Pomodoro.",
-                ephemeral=True,
+            await interaction.followup.send(
+                "🤷 You don't have an active Pomodoro.",
             )
             return
 
@@ -2875,18 +2932,18 @@ async def pomo_stop(interaction: discord.Interaction):
             color=0xFEE75C,
             timestamp=datetime.datetime.now(datetime.UTC),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Pomo stop error: {e}")
         try:
-            await interaction.response.send_message("\u274c Error stopping Pomodoro.", ephemeral=True)
+            await interaction.followup.send("❌ Error stopping Pomodoro.")
         except discord.InteractionResponded:
             pass
 
 
 @pomo_group.command(name="status", description="Check the current Pomodoro status.")
 async def pomo_status(interaction: discord.Interaction):
-    """Shows the current pomodoro status (group + individual)."""
+    await interaction.response.defer(ephemeral=True)
     try:
         phase, remaining, into = get_pomodoro_phase()
         time_str = format_mm_ss(remaining)
@@ -2933,11 +2990,11 @@ async def pomo_status(interaction: discord.Interaction):
                 inline=False,
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Pomo status error: {e}")
         try:
-            await interaction.response.send_message("\u274c Error checking status.", ephemeral=True)
+            await interaction.followup.send("❌ Error checking status.")
         except discord.InteractionResponded:
             pass
 
@@ -2951,110 +3008,53 @@ async def weekly_graph_command(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)
 
-        import matplotlib
-        matplotlib.use('Agg')
-        from matplotlib.figure import Figure
-        from io import BytesIO
+        data = await load_data()
+        uid = str(interaction.user.id)
 
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(interaction.user.id)
+        if uid not in data["users"]:
+            await interaction.followup.send("📬 No study data found yet!", ephemeral=True)
+            return
 
-            if uid not in data["users"]:
-                await interaction.followup.send("\U0001f4ed No study data found yet!", ephemeral=True)
-                return
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
-                await save_data(data)
         today = get_ist_date()
-
-        days = []
-        for i in range(6, -1, -1):
-            days.append(today - datetime.timedelta(days=i))
-
-        day_labels = [d.strftime("%a\n%d") for d in days]
+        days = [today - datetime.timedelta(days=i) for i in range(6, -1, -1)]
         day_strs = [d.isoformat() for d in days]
         history = udata.get("daily_history", {})
         hours = [history.get(ds, 0) / 3600 for ds in day_strs]
         total_week = sum(hours)
 
-        # Generate graph
-        fig = Figure(figsize=(8, 4))
-        fig.patch.set_facecolor('#2B2D31')
-        ax = fig.subplots()
-        ax.set_facecolor('#1E1F22')
-
-        colors = []
-        for h in hours:
-            if h >= 3:
-                colors.append('#57F287')
-            elif h >= 1:
-                colors.append('#5865F2')
-            elif h > 0:
-                colors.append('#FEE75C')
-            else:
-                colors.append('#4F545C')
-
-        bars = ax.bar(day_labels, hours, color=colors, width=0.6, edgecolor='none', zorder=3)
-
-        for bar, h in zip(bars, hours):
-            if h > 0:
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + 0.1,
-                    f"{h:.1f}h",
-                    ha='center', va='bottom',
-                    color='white', fontsize=10, fontweight='bold',
-                )
-
-        ax.set_ylabel('Hours', color='white', fontsize=12)
-        ax.set_title(
-            f"{udata.get('username', 'User')}'s Weekly Study Report",
-            color='white', fontsize=14, fontweight='bold', pad=15,
-        )
-
-        ax.tick_params(colors='white', labelsize=10)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_color('#4F545C')
-        ax.spines['bottom'].set_color('#4F545C')
-        ax.yaxis.grid(True, color='#4F545C', alpha=0.3, zorder=0)
-
-        avg_daily = total_week / 7
-        ax.text(
-            0.98, 0.95,
-            f"Total: {total_week:.1f}h | Avg: {avg_daily:.1f}h/day",
-            transform=ax.transAxes, ha='right', va='top',
-            color='#B5BAC1', fontsize=10,
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#1E1F22', edgecolor='#4F545C', alpha=0.8),
-        )
-
-        fig.tight_layout()
-
-        buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        buf.seek(0)
+        # Call modern matplotlib generator in a background thread to avoid event loop blocking
+        from utils import generate_weekly_chart
+        username = udata.get('username', 'User')
+        buf = await asyncio.to_thread(generate_weekly_chart, username, days, hours)
 
         embed = discord.Embed(
-            title="\U0001f4ca Your Weekly Study Report",
+            title="📊 Your Weekly Study Report",
             description=(
-                f"\U0001f4da Total: **{total_week:.1f} hours**\n"
-                f"\U0001f4c5 Best day: **{max(hours):.1f}h**\n"
-                f"\U0001f525 Study days: **{sum(1 for h in hours if h > 0)}/7**"
+                f"📚 Total: **{total_week:.1f} hours**\n"
+                f"📆 Best day: **{max(hours):.1f}h**\n"
+                f"🔥 Study days: **{sum(1 for h in hours if h > 0)}/7**"
             ),
             color=USER_COLORS.get(interaction.user.id, DEFAULT_COLOR),
             timestamp=datetime.datetime.now(datetime.UTC),
         )
         embed.set_image(url="attachment://weekly_graph.png")
-        embed.set_footer(text="Keep grinding! \U0001f4aa")
+        embed.set_footer(text="Keep grinding! 💪")
 
         file = discord.File(buf, filename="weekly_graph.png")
         await interaction.followup.send(embed=embed, file=file, ephemeral=True)
     except Exception as e:
         logging.error(f"Weekly graph command error: {e}")
         try:
-            await interaction.followup.send("\u274c Error generating graph.", ephemeral=True)
+            await interaction.followup.send("❌ Error generating graph.", ephemeral=True)
         except Exception:
             pass
 
@@ -3068,21 +3068,26 @@ async def weekly_graph_command(interaction: discord.Interaction):
 async def heatmap_command(interaction: discord.Interaction, user: discord.Member | None = None):
     """Shows a calendar heatmap of study activity for the current month."""
     try:
+        await interaction.response.defer()
         target = user or interaction.user
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(target.id)
+        data = await load_data()
+        uid = str(target.id)
 
-            if uid not in data["users"]:
-                await interaction.response.send_message(
-                    f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
-                    ephemeral=True,
-                )
-                return
+        if uid not in data["users"]:
+            await interaction.followup.send(
+                f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
+                ephemeral=True,
+            )
+            return
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
-                await save_data(data)
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
+                data = await load_data()
+                udata = data["users"].get(uid)
+                if udata:
+                    enforce_user_resets(udata)
+                    await save_data(data)
         today = get_ist_date()
         history = udata.get("daily_history", {})
         cal = calendar.monthcalendar(today.year, today.month)
@@ -3138,11 +3143,11 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
         )
         embed.set_footer(text="Consistency is key. Fill the calendar! 💪")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Heatmap command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred generating the heatmap.", ephemeral=True)
+            await interaction.followup.send("❌ An error occurred generating the heatmap.", ephemeral=True)
         except discord.InteractionResponded:
             pass
 
@@ -3229,40 +3234,50 @@ async def checkin_command(interaction: discord.Interaction, plan: str):
     """Daily check-in with study plan."""
     await interaction.response.defer()
     try:
-        data = await load_data()
-        uid = str(interaction.user.id)
-        udata = ensure_user(data, interaction.user)
         now_ist = get_ist_now()
         today_str = now_ist.date().isoformat()
-
-        # Check if already checked in today
-        last_checkin = udata.get('last_checkin_date')
-        if last_checkin == today_str:
-            await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
-            return
-
-        checkin_streak = udata.get('checkin_streak', 0)
-        last_checkin_date_prev = udata.get('last_checkin_date_prev')
-
-        # Check streak
-        if last_checkin_date_prev:
-            try:
-                prev = datetime.date.fromisoformat(last_checkin_date_prev)
-                if (now_ist.date() - prev).days == 1:
-                    checkin_streak += 1
-                else:
-                    checkin_streak = 1
-            except Exception:
-                checkin_streak = 1
-        else:
-            checkin_streak = 1
-
-        udata['last_checkin_date'] = today_str
-        udata['checkin_plan'] = plan
-        udata['checkin_streak'] = checkin_streak
-        udata['last_checkin_date_prev'] = today_str
+        
+        # Read-only check first
+        data = await load_data()
+        uid = str(interaction.user.id)
+        if uid in data["users"]:
+            if data["users"][uid].get('last_checkin_date') == today_str:
+                await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
+                return
 
         async with bot.db_write_lock:
+            data = await load_data()
+            udata = ensure_user(data, interaction.user)
+            now_ist = get_ist_now()
+            today_str = now_ist.date().isoformat()
+
+            # Re-check inside lock
+            last_checkin = udata.get('last_checkin_date')
+            if last_checkin == today_str:
+                await interaction.followup.send('✅ You already checked in today! Get back to studying.', ephemeral=True)
+                return
+
+            checkin_streak = udata.get('checkin_streak', 0)
+            last_checkin_date_prev = udata.get('last_checkin_date_prev')
+
+            # Check streak
+            if last_checkin_date_prev:
+                try:
+                    prev = datetime.date.fromisoformat(last_checkin_date_prev)
+                    if (now_ist.date() - prev).days == 1:
+                        checkin_streak += 1
+                    else:
+                        checkin_streak = 1
+                except Exception:
+                    checkin_streak = 1
+            else:
+                checkin_streak = 1
+
+            udata['last_checkin_date'] = today_str
+            udata['checkin_plan'] = plan
+            udata['checkin_streak'] = checkin_streak
+            udata['last_checkin_date_prev'] = today_str
+
             await save_data(data)
 
         user_color = USER_COLORS.get(interaction.user.id, DEFAULT_COLOR)
@@ -3293,14 +3308,13 @@ async def checkin_command(interaction: discord.Interaction, plan: str):
 @bot.tree.command(name='remind', description='Set a personal study reminder')
 @app_commands.describe(minutes='Minutes until reminder', message='Reminder message (optional)')
 async def remind_command(interaction: discord.Interaction, minutes: int, message: str = 'Time to study!'):
-    """Sets a personal study reminder."""
+    await interaction.response.defer(ephemeral=True)
     if minutes < 1 or minutes > 180:
-        await interaction.response.send_message('⏰ Minutes must be between 1 and 180.', ephemeral=True)
+        await interaction.followup.send('⏰ Minutes must be between 1 and 180.')
         return
 
-    await interaction.response.send_message(
-        f'✅ Got it! I\'ll remind you in **{minutes} minute{"s" if minutes != 1 else ""}**.',
-        ephemeral=True
+    await interaction.followup.send(
+        f'✅ Got it! I\'ll remind you in **{minutes} minute{"s" if minutes != 1 else ""}**.'
     )
 
     async def run_reminder(user, mins, msg):
@@ -3334,7 +3348,12 @@ async def shutdown(sig=None):
         await bot.close()
         logging.info("Discord bot client closed.")
         
-    # 2. Clean up keep-alive runner
+    # 2. Close shared aiohttp session
+    if bot._http_session and not bot._http_session.closed:
+        await bot._http_session.close()
+        logging.info("Shared aiohttp session closed.")
+
+    # 3. Clean up keep-alive runner
     global _keepalive_runner
     if _keepalive_runner:
         try:

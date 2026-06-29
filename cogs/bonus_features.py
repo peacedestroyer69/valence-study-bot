@@ -20,28 +20,15 @@ import json
 import os
 import random
 import time
-import firebase_admin
-from firebase_admin import credentials, firestore
-from bot import get_ist_date, get_ist_now, IST_TZ
+from utils import (
+    get_ist_date, get_ist_now, IST_TZ,
+    VALENCE_ID, UJJWAL_ID, CELEBRATION_CHANNEL_ID, LEADERBOARD_CHANNEL_ID,
+    STUDY_TEXT_CHANNEL_ID, STUDY_CHANNELS, DOUBT_CHANNELS, USER_COLORS, DEFAULT_COLOR
+)
 
 # DATA_FILE removed, cogs use self.bot database methods
 
-# ---- Channel & User IDs ----
-VALENCE_ID = "856485470171299891"
-UJJWAL_ID = "1403716456025165864"
-CELEBRATION_CHANNEL_ID = 1514208252760424591
-LEADERBOARD_CHANNEL_ID = 1514208164071870514
-STUDY_TEXT_CHANNEL_ID = 1514241642415001610
-
-# Study voice channels (for break reminder check)
-STUDY_VOICE_CHANNELS = {1514208313452007514, 1514596473629708298, 1514244606827561171}
-
-# User accent colors
-USER_COLORS = {
-    856485470171299891:  0x5865F2,
-    1403716456025165864: 0xEB459E,
-}
-DEFAULT_COLOR = 0x2B2D31
+# Configuration imported from utils.py
 
 
 # Synchronous file load/save functions removed. Using self.bot.load_data() and self.bot.save_data() instead.
@@ -107,6 +94,17 @@ MOTIVATIONAL_QUOTES = [
     ("Your competition is not resting. Are you?", "Urgency"),
     ("Every hour of studying today is an investment that pays on exam day.", "Investment"),
     ("Success is not given. It is taken. So take it.", "Ownership"),
+    # --- New additions ---
+    ("The difference between a 99 percentile and 95 percentile is one extra hour every single day.", "JEE Math"),
+    ("Your parents didn't sacrifice everything for you to scroll reels at 2 AM.", "Wake Up Call"),
+    ("IIT Bombay CS doesn't care about your mood. It cares about your marks.", "Harsh Truth"),
+    ("The syllabus won't finish itself. Open the book. Start the chapter. NOW.", "Action"),
+    ("You're not competing with 20 lakh students. You're competing with yesterday's version of you.", "Self-Competition"),
+    ("Sleep is earned, not given. Did you earn it today?", "Discipline"),
+    ("Kota toppers aren't smarter. They're just more consistent.", "Consistency"),
+    ("That 'one more episode' costs you 3 marks in JEE. Is it worth it?", "Opportunity Cost"),
+    ("The formula sheet you make today is the weapon you carry into the exam hall.", "Preparation"),
+    ("Every unsolved PYQ is a question that WILL appear again. Solve it now or regret it later.", "PYQ Strategy"),
 ]
 
 # ============================================================
@@ -169,9 +167,10 @@ class BonusFeaturesCog(commands.Cog):
                 f"- Format: just the quote text, no quotation marks, no attribution"
             )
             result = await _call_gemini(prompt, fallback="", timeout=8.0,
-                                        model_preference=["gemini-2.0-flash-lite", "gemini-2.0-flash"])
+                                        model_preference=["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"])
             if result and len(result) > 20:
-                ai_quote = result.strip()
+                from cogs.gemini_brain import clean_message_text
+                ai_quote = clean_message_text(result)
                 ai_author = f"Gemini AI for {username}"
         except Exception as e:
             logging.warning(f"[MOTIVATE] Gemini quote generation failed: {e}")
@@ -302,8 +301,8 @@ class BonusFeaturesCog(commands.Cog):
         sorted_days = sorted(history.items(), key=lambda x: x[0], reverse=True)[:10]
 
         if not sorted_days:
-            await interaction.response.send_message(
-                f"📭 No study history for **{target.display_name}** yet.", ephemeral=True
+            await interaction.followup.send(
+                f"📭 No study history for **{target.display_name}** yet."
             )
             return
 
@@ -356,7 +355,15 @@ class BonusFeaturesCog(commands.Cog):
         data = await self.bot.load_data()
 
         if exam_name and exam_date:
-            # Setting a new countdown
+            # Enforce admin permission for setting countdowns
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.followup.send("❌ Only server administrators can set new countdowns!", ephemeral=True)
+                return
+
+            if len(exam_name) > 50:
+                await interaction.followup.send("❌ Exam name cannot exceed 50 characters!", ephemeral=True)
+                return
+
             try:
                 target_date = datetime.date.fromisoformat(exam_date)
             except ValueError:
@@ -370,13 +377,22 @@ class BonusFeaturesCog(commands.Cog):
                 await interaction.followup.send("❌ That date is in the past!")
                 return
 
-            # Save to meta
+            # Check total count limit (max 10 active countdowns)
             async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
-                if "countdowns" not in data:
-                    data["countdowns"] = {}
-                data["countdowns"][exam_name] = exam_date
-                await self.bot.save_data(data)
+                countdowns = data.get("countdowns", {})
+                if len(countdowns) >= 10 and exam_name not in countdowns:
+                    limit_reached = True
+                else:
+                    limit_reached = False
+                    if "countdowns" not in data:
+                        data["countdowns"] = {}
+                    data["countdowns"][exam_name] = exam_date
+                    await self.bot.save_data(data)
+
+            if limit_reached:
+                await interaction.followup.send("❌ Limit of 10 active countdowns reached! Delete an existing countdown before setting a new one.", ephemeral=True)
+                return
 
             embed = discord.Embed(
                 title=f"⏳ Countdown Set: {exam_name}",
@@ -394,7 +410,7 @@ class BonusFeaturesCog(commands.Cog):
             countdowns = data.get("countdowns", {})
             if not countdowns:
                 await interaction.followup.send(
-                    "📭 No countdowns set. Use `/countdown exam_name:\"JEE\" exam_date:\"2025-01-22\"` to set one."
+                    "📭 No countdowns set. Ask a server admin to set one."
                 )
                 return
 
@@ -414,13 +430,36 @@ class BonusFeaturesCog(commands.Cog):
                 except ValueError:
                     lines.append(f"**{name}** — Invalid date")
 
+            description_text = "\n".join(lines)
+            if len(description_text) > 4000:
+                description_text = description_text[:3997] + "..."
+
             embed = discord.Embed(
                 title="⏳ Exam Countdowns",
-                description="\n".join(lines),
+                description=description_text,
                 color=0x5865F2,
                 timestamp=get_ist_now(),
             )
             await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="delete_countdown", description="Delete an exam countdown (Admin only).")
+    @app_commands.describe(exam_name="Name of the countdown to delete")
+    @app_commands.default_permissions(administrator=True)
+    async def delete_countdown(self, interaction: discord.Interaction, exam_name: str):
+        await interaction.response.defer(ephemeral=True)
+        deleted = False
+        async with self.bot.db_write_lock:
+            data = await self.bot.load_data()
+            countdowns = data.get("countdowns", {})
+            if exam_name in countdowns:
+                del countdowns[exam_name]
+                await self.bot.save_data(data)
+                deleted = True
+
+        if deleted:
+            await interaction.followup.send(f"✅ Successfully deleted countdown for **{exam_name}**.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ No countdown found with the name **{exam_name}**.", ephemeral=True)
 
     # ==================================================================
     # TASK: WEEKLY DUEL (Every Sunday 9 PM IST)
@@ -431,39 +470,46 @@ class BonusFeaturesCog(commands.Cog):
         try:
             now_ist = get_ist_now()
 
-            # Sunday = 6, 9 PM, first 10 minutes
-            if now_ist.weekday() != 6 or now_ist.hour != 21 or now_ist.minute >= 10:
+            # Sunday = 6, 9 PM
+            if now_ist.weekday() != 6 or now_ist.hour != 21:
                 return
 
-            data = await self.bot.load_data()
-            loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
-            today_str = now_ist.date().isoformat()
-            if loop_state.get("last_weekly_duel") == today_str:
-                return
-
-            # Sort users by weekly hours
-            users = data.get("users", {})
-            weekly_hours_list = []
-            for u_id, u_data in users.items():
-                hours = u_data.get("total_seconds_weekly", 0) / 3600
-                name = u_data.get("username", "Unknown")
-                weekly_hours_list.append((u_id, name, hours))
-            
-            weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
-
-            if len(weekly_hours_list) < 2:
-                return # Need at least two users for a duel!
-
-            winner_id, winner_name, winner_hours = weekly_hours_list[0]
-            loser_id, loser_name, loser_hours = weekly_hours_list[1]
-
-            if winner_hours == 0 and loser_hours == 0:
-                logging.info("[DUEL] Skipping weekly duel announcement: both users have 0 hours.")
-                return
-
-            # Mark as done in DB
-            loop_state["last_weekly_duel"] = today_str
             async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                today_str = now_ist.date().isoformat()
+                if loop_state.get("last_weekly_duel") == today_str:
+                    return
+
+                # Sort specific users (Valence and Ujjwal) by weekly hours
+                users = data.get("users", {})
+                valence_uid = str(VALENCE_ID)
+                ujjwal_uid = str(UJJWAL_ID)
+                
+                v_data = users.get(valence_uid, {})
+                u_data = users.get(ujjwal_uid, {})
+                
+                v_hours = v_data.get("total_seconds_weekly", 0) / 3600
+                u_hours = u_data.get("total_seconds_weekly", 0) / 3600
+                
+                v_name = v_data.get("username", "Valence")
+                u_name = u_data.get("username", "Ujjwal")
+                
+                weekly_hours_list = [
+                    (valence_uid, v_name, v_hours),
+                    (ujjwal_uid, u_name, u_hours)
+                ]
+                weekly_hours_list.sort(key=lambda x: x[2], reverse=True)
+
+                winner_id, winner_name, winner_hours = weekly_hours_list[0]
+                loser_id, loser_name, loser_hours = weekly_hours_list[1]
+
+                if winner_hours == 0 and loser_hours == 0:
+                    logging.info("[DUEL] Skipping weekly duel announcement: both users have 0 hours.")
+                    return
+
+                # Mark as done in DB
+                loop_state["last_weekly_duel"] = today_str
                 await self.bot.save_data(data)
 
             channel = await self.bot.get_or_fetch_channel(CELEBRATION_CHANNEL_ID)
@@ -531,8 +577,8 @@ class BonusFeaturesCog(commands.Cog):
                     continue
 
                 elapsed = now_ts - start_ts
-                # Only fire at 2h mark (7200-7500s window to avoid repeat)
-                if 7200 <= elapsed < 7500:
+                # Only fire at 2h mark or above, guarded by a state attribute
+                if elapsed >= 7200:
                     flag = f"_break_reminder_{uid_str}_{start_ts}"
                     if getattr(self, flag, False):
                         continue
@@ -546,12 +592,10 @@ class BonusFeaturesCog(commands.Cog):
                             except Exception:
                                 member = None
                         if member:
-                            # Verify member is currently connected to a study voice channel
-                            from bot import DOUBT_CHANNELS
                             in_study_channel = False
                             if member.voice and member.voice.channel:
                                 channel_id = member.voice.channel.id
-                                if channel_id in STUDY_VOICE_CHANNELS or channel_id in DOUBT_CHANNELS:
+                                if channel_id in STUDY_CHANNELS or channel_id in DOUBT_CHANNELS:
                                     in_study_channel = True
                             
                             if not in_study_channel:
@@ -591,7 +635,7 @@ class BonusFeaturesCog(commands.Cog):
         try:
             data = await self.bot.load_data()
             users = data.get("users", {})
-            today_str = get_ist_date()
+            today_str = get_ist_date().isoformat()
 
             for uid_str in list(users.keys()):
                 udata = users.get(uid_str, {})
@@ -701,7 +745,7 @@ class BonusFeaturesCog(commands.Cog):
             timestamp=get_ist_now(),
         )
         embed.set_footer(text="Resets every Monday. May the grind be with you. ⚔️")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ==================================================================
     # COMMAND: /flex — Dramatic stats flex
