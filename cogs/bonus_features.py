@@ -167,7 +167,7 @@ class BonusFeaturesCog(commands.Cog):
                 f"- Format: just the quote text, no quotation marks, no attribution"
             )
             result = await _call_gemini(prompt, fallback="", timeout=8.0,
-                                        model_preference=["gemini-2.0-flash-lite", "gemini-2.0-flash"])
+                                        model_preference=["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"])
             if result and len(result) > 20:
                 ai_quote = result.strip()
                 ai_author = f"Gemini AI for {username}"
@@ -381,13 +381,17 @@ class BonusFeaturesCog(commands.Cog):
                 data = await self.bot.load_data()
                 countdowns = data.get("countdowns", {})
                 if len(countdowns) >= 10 and exam_name not in countdowns:
-                    await interaction.followup.send("❌ Limit of 10 active countdowns reached! Delete an existing countdown before setting a new one.", ephemeral=True)
-                    return
+                    limit_reached = True
+                else:
+                    limit_reached = False
+                    if "countdowns" not in data:
+                        data["countdowns"] = {}
+                    data["countdowns"][exam_name] = exam_date
+                    await self.bot.save_data(data)
 
-                if "countdowns" not in data:
-                    data["countdowns"] = {}
-                data["countdowns"][exam_name] = exam_date
-                await self.bot.save_data(data)
+            if limit_reached:
+                await interaction.followup.send("❌ Limit of 10 active countdowns reached! Delete an existing countdown before setting a new one.", ephemeral=True)
+                return
 
             embed = discord.Embed(
                 title=f"⏳ Countdown Set: {exam_name}",
@@ -442,15 +446,19 @@ class BonusFeaturesCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def delete_countdown(self, interaction: discord.Interaction, exam_name: str):
         await interaction.response.defer(ephemeral=True)
+        deleted = False
         async with self.bot.db_write_lock:
             data = await self.bot.load_data()
             countdowns = data.get("countdowns", {})
             if exam_name in countdowns:
                 del countdowns[exam_name]
                 await self.bot.save_data(data)
-                await interaction.followup.send(f"✅ Successfully deleted countdown for **{exam_name}**.", ephemeral=True)
-            else:
-                await interaction.followup.send(f"❌ No countdown found with the name **{exam_name}**.", ephemeral=True)
+                deleted = True
+
+        if deleted:
+            await interaction.followup.send(f"✅ Successfully deleted countdown for **{exam_name}**.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ No countdown found with the name **{exam_name}**.", ephemeral=True)
 
     # ==================================================================
     # TASK: WEEKLY DUEL (Every Sunday 9 PM IST)

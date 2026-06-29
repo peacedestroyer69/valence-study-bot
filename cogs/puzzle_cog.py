@@ -47,59 +47,72 @@ class PuzzleAnswerView(discord.ui.View):
         now_ist = get_ist_now()
         today_str = now_ist.date().isoformat()
 
+        # --- Acquire lock briefly: load, check, save if correct ---
         async with self.cog.bot.db_write_lock:
             data = await self.cog.bot.load_data()
             puzzle_data = data.get("meta", {}).get("puzzle_of_day", {})
             today_puzzle = puzzle_data.get(today_str)
 
             if not today_puzzle:
-                await interaction.followup.send("❌ No puzzle found for today. Check back later!", ephemeral=True)
-                return
+                _reply = ("no_puzzle", None, None)
+            elif uid in today_puzzle.get("solved_users", []):
+                _reply = ("already_solved", None, None)
+            else:
+                correct_answer = today_puzzle.get("answer", "A")
+                explanation = today_puzzle.get("explanation", "")
+                options = today_puzzle.get("options", {})
 
-            already_solved = uid in today_puzzle.get("solved_users", [])
-            if already_solved:
-                await interaction.followup.send(
-                    "✅ You already solved today's puzzle! Come back tomorrow for a new one.",
-                    ephemeral=True,
-                )
-                return
+                if chosen == correct_answer:
+                    if "solved_users" not in today_puzzle:
+                        today_puzzle["solved_users"] = []
+                    today_puzzle["solved_users"].append(uid)
+                    data["meta"]["puzzle_of_day"][today_str] = today_puzzle
+                    await self.cog.bot.save_data(data)
+                    _reply = ("correct", explanation, None)
+                else:
+                    _reply = ("wrong", None, options)
+        # --- Lock released ---
 
-            correct_answer = today_puzzle.get("answer", "A")
-            explanation = today_puzzle.get("explanation", "")
+        if _reply[0] == "no_puzzle":
+            await interaction.followup.send("❌ No puzzle found for today. Check back later!", ephemeral=True)
+            return
 
-            if chosen == correct_answer:
-                if "solved_users" not in today_puzzle:
-                    today_puzzle["solved_users"] = []
-                today_puzzle["solved_users"].append(uid)
-                data["meta"]["puzzle_of_day"][today_str] = today_puzzle
-                await self.cog.bot.save_data(data)
+        if _reply[0] == "already_solved":
+            await interaction.followup.send(
+                "✅ You already solved today's puzzle! Come back tomorrow for a new one.",
+                ephemeral=True,
+            )
+            return
 
-                # Award solved role
-                if PUZZLE_SOLVED_ROLE_ID:
-                    try:
-                        guild = interaction.guild or (self.cog.bot.guilds[0] if self.cog.bot.guilds else None)
-                        if guild:
-                            member = guild.get_member(interaction.user.id)
-                            if not member:
-                                member = await guild.fetch_member(interaction.user.id)
-                            if member:
-                                role = guild.get_role(PUZZLE_SOLVED_ROLE_ID)
-                                if role:
-                                    await member.add_roles(role, reason="Puzzle of the Day solved")
-                    except Exception as e:
-                        logging.warning(f"[PUZZLE] Could not add solved role: {e}")
+        if _reply[0] == "correct":
+            explanation = _reply[1]
+            # Award solved role
+            if PUZZLE_SOLVED_ROLE_ID:
+                try:
+                    guild = interaction.guild or (self.cog.bot.guilds[0] if self.cog.bot.guilds else None)
+                    if guild:
+                        member = guild.get_member(interaction.user.id)
+                        if not member:
+                            member = await guild.fetch_member(interaction.user.id)
+                        if member:
+                            role = guild.get_role(PUZZLE_SOLVED_ROLE_ID)
+                            if role:
+                                await member.add_roles(role, reason="Puzzle of the Day solved")
+                except Exception as e:
+                    logging.warning(f"[PUZZLE] Could not add solved role: {e}")
 
-                embed = discord.Embed(
-                    title="🎉 Correct! Well Done!",
-                    description=f"You answered **{chosen}** — that's right!\n\n📖 **Explanation:**\n{explanation}",
-                    color=0x57F287,
-                )
-                embed.set_footer(text=f"YPT Study Bot • Puzzle of the Day • {today_str}")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                logging.info(f"[PUZZLE] {interaction.user.display_name} solved today's puzzle")
-                return
+            embed = discord.Embed(
+                title="🎉 Correct! Well Done!",
+                description=f"You answered **{chosen}** — that's right!\n\n📖 **Explanation:**\n{explanation}",
+                color=0x57F287,
+            )
+            embed.set_footer(text=f"YPT Study Bot • Puzzle of the Day • {today_str}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            logging.info(f"[PUZZLE] {interaction.user.display_name} solved today's puzzle")
+            return
 
-        options = today_puzzle.get("options", {})
+        # Wrong answer
+        options = _reply[2]
         chosen_text = options.get(chosen, "")
         embed = discord.Embed(
             title=f"❌ Wrong — You chose {chosen}",
@@ -141,54 +154,63 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
 
+        # --- Acquire lock briefly: load, check, save ---
         async with self.cog.bot.db_write_lock:
             data = await self.cog.bot.load_data()
             weekly_puzzle = data.setdefault("meta", {}).setdefault("weekly_puzzle", {}).setdefault("active", {})
 
             if not weekly_puzzle.get("question") or weekly_puzzle.get("question") == "Generating...":
-                await interaction.followup.send("❌ No weekly puzzle active right now. Check back later!", ephemeral=True)
-                return
+                _reply = "no_puzzle"
+            elif uid in weekly_puzzle.setdefault("solvers", {}):
+                _reply = "already_solved"
+            else:
+                solvers = weekly_puzzle["solvers"]
+                attempts = weekly_puzzle.setdefault("attempts", {})
+                correct_answer = weekly_puzzle.get("answer", "A")
+                explanation = weekly_puzzle.get("explanation", "")
+                now_ts = datetime.datetime.now(datetime.UTC).timestamp()
 
-            solvers = weekly_puzzle.setdefault("solvers", {})
-            attempts = weekly_puzzle.setdefault("attempts", {})
-            already_solved = uid in solvers
-            if already_solved:
-                await interaction.followup.send(
-                    "✅ You already solved this week's mega puzzle! Outstanding work.",
-                    ephemeral=True,
-                )
-                return
+                if chosen == correct_answer:
+                    solvers[uid] = now_ts
+                    
+                    # Increment weekly solve count in user's statistics
+                    udata = data.setdefault("users", {}).setdefault(uid, {})
+                    udata["weekly_puzzles_solved"] = udata.get("weekly_puzzles_solved", 0) + 1
+                    
+                    await self.cog.bot.save_data(data)
+                    _reply = "correct"
+                else:
+                    # Incorrect attempt path
+                    user_attempts = attempts.setdefault(uid, {"count": 0, "incorrect": [], "last_attempt_at": 0})
+                    user_attempts["count"] += 1
+                    if chosen not in user_attempts["incorrect"]:
+                        user_attempts["incorrect"].append(chosen)
+                    user_attempts["last_attempt_at"] = now_ts
+                    await self.cog.bot.save_data(data)
+                    _reply = "wrong"
+        # --- Lock released ---
 
-            correct_answer = weekly_puzzle.get("answer", "A")
-            explanation = weekly_puzzle.get("explanation", "")
-            now_ts = datetime.datetime.now(datetime.UTC).timestamp()
+        if _reply == "no_puzzle":
+            await interaction.followup.send("❌ No weekly puzzle active right now. Check back later!", ephemeral=True)
+            return
 
-            if chosen == correct_answer:
-                solvers[uid] = now_ts
-                
-                # Increment weekly solve count in user's statistics
-                udata = data.setdefault("users", {}).setdefault(uid, {})
-                udata["weekly_puzzles_solved"] = udata.get("weekly_puzzles_solved", 0) + 1
-                
-                await self.cog.bot.save_data(data)
+        if _reply == "already_solved":
+            await interaction.followup.send(
+                "✅ You already solved this week's mega puzzle! Outstanding work.",
+                ephemeral=True,
+            )
+            return
 
-                embed = discord.Embed(
-                    title="🧠 Outstanding! Weekly Mega Puzzle Solved!",
-                    description=f"You answered **{chosen}** — that's correct!\n\n📖 **Explanation:**\n{explanation}",
-                    color=0x2ECC71,
-                )
-                embed.set_footer(text="YPT Study Bot • Weekly Mega Puzzle • solved")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                logging.info(f"[PUZZLE] {interaction.user.display_name} solved the weekly mega puzzle")
-                return
-
-            # Incorrect attempt path
-            user_attempts = attempts.setdefault(uid, {"count": 0, "incorrect": [], "last_attempt_at": 0})
-            user_attempts["count"] += 1
-            if chosen not in user_attempts["incorrect"]:
-                user_attempts["incorrect"].append(chosen)
-            user_attempts["last_attempt_at"] = now_ts
-            await self.cog.bot.save_data(data)
+        if _reply == "correct":
+            embed = discord.Embed(
+                title="🧠 Outstanding! Weekly Mega Puzzle Solved!",
+                description=f"You answered **{chosen}** — that's correct!\n\n📖 **Explanation:**\n{explanation}",
+                color=0x2ECC71,
+            )
+            embed.set_footer(text="YPT Study Bot • Weekly Mega Puzzle • solved")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            logging.info(f"[PUZZLE] {interaction.user.display_name} solved the weekly mega puzzle")
+            return
 
     @discord.ui.button(label="A", style=discord.ButtonStyle.success, custom_id="weekly_puzzle_answer_A")
     async def answer_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -282,11 +304,10 @@ class PuzzleCog(commands.Cog):
         # 1. Daily puzzle check
         if now_ist.hour >= 8:
             today_str = now_ist.date().isoformat()
-            async with self.bot.db_write_lock:
-                data = await self.bot.load_data()
-                puzzle_data = data.get("meta", {}).get("puzzle_of_day", {})
-                loop_state = data.get("meta", {}).get("puzzle_loop_state", {})
-                need_daily_post = today_str not in puzzle_data or loop_state.get("posted_date") != today_str
+            data = await self.bot.load_data()
+            puzzle_data = data.get("meta", {}).get("puzzle_of_day", {})
+            loop_state = data.get("meta", {}).get("puzzle_loop_state", {})
+            need_daily_post = today_str not in puzzle_data or loop_state.get("posted_date") != today_str
             
             if need_daily_post:
                 logging.info("[PUZZLE] Startup check: Today's daily puzzle is missing. Posting now...")
@@ -295,11 +316,10 @@ class PuzzleCog(commands.Cog):
         # 2. Weekly puzzle check
         expected_start = self.get_expected_weekly_start_date(now_ist)
         expected_start_str = expected_start.isoformat()
-        async with self.bot.db_write_lock:
-            data = await self.bot.load_data()
-            weekly_data = data.setdefault("meta", {}).setdefault("weekly_puzzle", {})
-            active = weekly_data.setdefault("active", {})
-            need_weekly_post = active.get("week_start_date") != expected_start_str
+        data = await self.bot.load_data()
+        weekly_data = data.get("meta", {}).get("weekly_puzzle", {})
+        active = weekly_data.get("active", {})
+        need_weekly_post = active.get("week_start_date") != expected_start_str
 
         if need_weekly_post:
             logging.info(f"[PUZZLE] Startup check: Weekly puzzle for week of {expected_start_str} is missing. Posting now...")
@@ -521,9 +541,8 @@ class PuzzleCog(commands.Cog):
     async def _publish_weekly_leaderboard(self, now_ist):
         """Generates and posts the weekly mega puzzle shoutout & leaderboard."""
         try:
-            async with self.bot.db_write_lock:
-                data = await self.bot.load_data()
-                weekly_puzzle = data.get("meta", {}).get("weekly_puzzle", {}).get("active", {})
+            data = await self.bot.load_data()
+            weekly_puzzle = data.get("meta", {}).get("weekly_puzzle", {}).get("active", {})
             
             if not weekly_puzzle or not weekly_puzzle.get("question") or weekly_puzzle.get("question") == "Generating...":
                 return

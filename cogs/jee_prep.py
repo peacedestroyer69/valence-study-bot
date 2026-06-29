@@ -338,11 +338,10 @@ class JEEPrepCog(commands.Cog):
             if now_ist.weekday() == 6 and now_ist.hour == 22:
                 today_str = now_ist.date().isoformat()
                 
-                async with self.bot.db_write_lock:
-                    data = await self.bot.load_data()
-                    meta = data.setdefault("meta", {})
-                    last_audit = meta.get("last_weekly_ai_audit")
-                    
+                data = await self.bot.load_data()
+                meta = data.setdefault("meta", {})
+                last_audit = meta.get("last_weekly_ai_audit")
+
                 if last_audit != today_str:
                     logging.info("[AI AUDIT] Sunday 10 PM IST reached. Commencing audits...")
                     await self._run_weekly_audits(data)

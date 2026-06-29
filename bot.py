@@ -688,31 +688,34 @@ async def update_leaderboard_embed(mode: str = "alltime"):
     try:
         async with bot.db_write_lock:
             data = await load_data()
-            channel = await get_or_fetch_channel(LEADERBOARD_CHANNEL_ID)
-            if channel is None:
-                logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
-                return
-
             db_changed = False
             for uid, udata in data.get("users", {}).items():
                 if enforce_user_resets(udata):
                     db_changed = True
+            if db_changed:
+                await save_data(data)
 
-            embed = build_leaderboard_embed(data, mode)
-            view = LeaderboardView(mode)
-            msg_id = data["meta"].get("leaderboard_message_id")
+        embed = build_leaderboard_embed(data, mode)
+        view = LeaderboardView(mode)
 
-            if msg_id is not None:
-                try:
-                    msg = await channel.fetch_message(msg_id)
-                    await msg.edit(embed=embed, view=view)
-                    if db_changed:
-                        await save_data(data)
-                    return
-                except (discord.NotFound, discord.HTTPException):
-                    logging.warning("Previous leaderboard message not found. Sending new one.")
+        channel = await get_or_fetch_channel(LEADERBOARD_CHANNEL_ID)
+        if channel is None:
+            logging.error(f"Leaderboard channel {LEADERBOARD_CHANNEL_ID} not found.")
+            return
 
-            msg = await channel.send(embed=embed, view=view)
+        msg_id = data["meta"].get("leaderboard_message_id")
+
+        if msg_id is not None:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.edit(embed=embed, view=view)
+                return
+            except (discord.NotFound, discord.HTTPException):
+                logging.warning("Previous leaderboard message not found. Sending new one.")
+
+        msg = await channel.send(embed=embed, view=view)
+        async with bot.db_write_lock:
+            data = await load_data()
             data["meta"]["leaderboard_message_id"] = msg.id
             await save_data(data)
     except Exception as e:
@@ -779,16 +782,14 @@ class LeaderboardView(discord.ui.View):
                 for uid, udata in data.get("users", {}).items():
                     if enforce_user_resets(udata):
                         db_changed = True
-                
-                embed = build_leaderboard_embed(data, mode)
-                view = LeaderboardView(mode)
-                
-                # Edit the message directly using the interaction response to complete it
-                await interaction.response.edit_message(embed=embed, view=view)
-                
-                data["meta"]["leaderboard_message_id"] = interaction.message.id
                 if db_changed:
                     await save_data(data)
+                
+            embed = build_leaderboard_embed(data, mode)
+            view = LeaderboardView(mode)
+                
+            # Edit the message directly using the interaction response to complete it
+            await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
             logging.error(f"Switch mode error: {e}")
 
@@ -1335,7 +1336,10 @@ async def check_weekly_reset(data: dict):
                 
                 if changed:
                     await save_data(data)
-                    await update_leaderboard_embed("alltime")
+
+            # Update leaderboard OUTSIDE the lock to avoid deadlock
+            if changed:
+                await update_leaderboard_embed("alltime")
 
             if do_weekly_announcement and winner_uid is not None and winner_seconds > 0:
                 try:
@@ -1606,6 +1610,16 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             udata["session_start_timestamp"] = None
             udata["session_channel_id"] = None
 
+            # Track variables for post-lock work
+            _do_pomo_log = False
+            _do_study_log = False
+            _do_doubt_log = False
+            _do_discussion_log = False
+            _is_new_pb = False
+            _study_secs = 0
+            _break_secs = 0
+            _total_time_in_channel = 0
+
             if channel.id == POMODORO_CHANNEL_ID:
                 # --- GROUP POMODORO: calculate study time excluding breaks ---
                 study_secs = calculate_pomodoro_study_seconds(real_start_ts, int(time.time()))
@@ -1630,35 +1644,26 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                     update_streak(udata)
                     await save_data(data)
 
-                    total_time_in_channel = int(time.time()) - real_start_ts
-                    break_secs = total_time_in_channel - study_secs
-
-                    log_info("POMODORO END", f"{format_time_precise(study_secs)} study ({format_time_precise(break_secs)} break) in #{channel.name}", member)
-
-                    await send_pomodoro_session_log(member, study_secs, break_secs, total_time_in_channel, data)
-                    await check_and_award_milestones(member, data)
-                    bot.dispatch("study_session_ended", member, study_secs)
-                    await update_leaderboard_embed(bot.current_view_mode)
+                    _total_time_in_channel = int(time.time()) - real_start_ts
+                    _break_secs = _total_time_in_channel - study_secs
+                    _study_secs = study_secs
+                    _do_pomo_log = True
                 else:
                     log_info("POMODORO DISCARD", f"{study_secs}s study (below minimum)", member)
                     await save_data(data)
 
-                # Keep status updates handled by the background status loop for Group Pomodoro
-                if channel.id != POMODORO_CHANNEL_ID:
-                    await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
             elif ch_type == "study":
                 # --- STUDY SESSION: full tracking ---
                 # Capture old PB BEFORE updating for new-PB detection in session log
                 old_longest_session = udata.get("longest_session_seconds", 0)
-                is_new_pb = session_seconds > old_longest_session
+                _is_new_pb = session_seconds > old_longest_session
 
                 udata["total_seconds_alltime"] = udata.get("total_seconds_alltime", 0) + session_seconds
                 udata["total_seconds_weekly"] = udata.get("total_seconds_weekly", 0) + session_seconds
                 udata["total_seconds_today"] = udata.get("total_seconds_today", 0) + session_seconds
                 udata["session_count"] = udata.get("session_count", 0) + 1
 
-                if is_new_pb:
+                if _is_new_pb:
                     udata["longest_session_seconds"] = session_seconds
                 if udata["total_seconds_today"] > udata.get("best_day_seconds", 0):
                     udata["best_day_seconds"] = udata["total_seconds_today"]
@@ -1671,72 +1676,7 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
 
                 update_streak(udata)
                 await save_data(data)
-
-                log_info("STUDY END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
-
-                await send_session_log(member, session_seconds, data, is_new_pb=is_new_pb)
-                await check_and_award_milestones(member, data)
-                bot.dispatch("study_session_ended", member, session_seconds)
-                await update_leaderboard_embed(bot.current_view_mode)
-
-                # Post-leave DM based on session length
-                try:
-                    session_minutes = session_seconds // 60
-                    today_hours = udata.get('total_seconds_today', 0) / 3600
-                    ist_now = get_ist_now()
-
-                    if session_minutes < 30:
-                        # Short session — come back nudge
-                        msg = discord.Embed(
-                            title="💨 Short Session Detected",
-                            description=f"Only **{session_minutes}m** this session. Breaks are fine — but come back within **10 minutes** and keep the momentum going!",
-                            color=0xFFA500
-                        )
-                        msg.add_field(name="⏱️ Session Length", value=f"{session_minutes}m", inline=True)
-                        msg.add_field(name="📊 Today's Total", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="💡 Tip", value="Even 25-minute Pomodoro sessions add up massively over a day!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • Come back soon!")
-                    elif today_hours >= 6.0:
-                        # Champion territory
-                        msg = discord.Embed(
-                            title="🏆 Outstanding Session!",
-                            description=f"**{format_time_precise(session_seconds)}** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
-                            color=0xFFD700
-                        )
-                        msg.add_field(name="🔥 Today's Total", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="🎯 JEE Target", value="6h+ ✅", inline=True)
-                        msg.add_field(name="💬 Reality Check", value="Top rankers put in days like this consistently. You're building the habit. Keep it up!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • You're on the right track!")
-                    elif today_hours >= 3.0:
-                        # Good but need more
-                        msg = discord.Embed(
-                            title="✅ Good Session! Keep It Going",
-                            description=f"**{format_time_precise(session_seconds)}** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
-                            color=0x57F287
-                        )
-                        msg.add_field(name="📊 Today So Far", value=f"{today_hours:.1f}h", inline=True)
-                        msg.add_field(name="🎯 6h Target", value=f"{6-today_hours:.1f}h remaining", inline=True)
-                        msg.add_field(name="⚡ Don't Stop", value="The gap between good and great is that extra session. Come back in 15 minutes!", inline=False)
-                        msg.set_footer(text="YPT Study Bot • Push for 6h!")
-                    else:
-                        # Under 3h — needs to come back urgently
-                        msg = discord.Embed(
-                            title="⚡ Come Back Soon!",
-                            description=f"**{format_time_precise(session_seconds)}** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
-                            color=0xEB459E
-                        )
-                        msg.add_field(name="📊 Today", value=f"{today_hours:.1f}h / 6h target", inline=True)
-                        msg.add_field(name="⏰ Remaining", value=f"{6-today_hours:.1f}h needed", inline=True)
-                        msg.set_footer(text="YPT Study Bot • Take a short break and return!")
-
-                    dm_user = bot.get_user(member.id) or await bot.fetch_user(member.id)
-                    if dm_user:
-                        await dm_user.send(embed=msg)
-                except Exception as dm_err:
-                    logging.warning(f"Could not send post-leave DM to {member.display_name}: {dm_err}")
-
-                await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
+                _do_study_log = True
 
             elif ch_type == "doubt":
                 # --- DOUBT SESSION: tracked separately, no milestones ---
@@ -1744,27 +1684,108 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
                 udata["total_seconds_doubt_weekly"] = udata.get("total_seconds_doubt_weekly", 0) + session_seconds
                 udata["doubt_session_count"] = udata.get("doubt_session_count", 0) + 1
                 await save_data(data)
-
-                log_info("DOUBT END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
-
-                await send_doubt_log(member, session_seconds, data, channel)
-                await check_and_award_doubt_milestones(member, data)
-
-                await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
+                _do_doubt_log = True
 
             elif ch_type == "discussion":
                 # --- DISCUSSION SESSION: log only, no achievements ---
                 udata["total_seconds_discussion"] = udata.get("total_seconds_discussion", 0) + session_seconds
                 udata["discussion_session_count"] = udata.get("discussion_session_count", 0) + 1
                 await save_data(data)
+                _do_discussion_log = True
 
-                logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+        # --- All Discord API work happens OUTSIDE the lock to avoid deadlocks ---
 
-                await send_discussion_log(member, session_seconds, data, channel)
+        if _do_pomo_log:
+            log_info("POMODORO END", f"{format_time_precise(_study_secs)} study ({format_time_precise(_break_secs)} break) in #{channel.name}", member)
+            await send_pomodoro_session_log(member, _study_secs, _break_secs, _total_time_in_channel, data)
+            await check_and_award_milestones(member, data)
+            bot.dispatch("study_session_ended", member, _study_secs)
+            await update_leaderboard_embed(bot.current_view_mode)
 
+        if channel.id == POMODORO_CHANNEL_ID:
+            # Keep status updates handled by the background status loop for Group Pomodoro
+            if channel.id != POMODORO_CHANNEL_ID:
                 await update_voice_channel_status(channel, None)
-                await update_bot_presence(data)
+            await update_bot_presence(data)
+
+        if _do_study_log:
+            log_info("STUDY END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
+            await send_session_log(member, session_seconds, data, is_new_pb=_is_new_pb)
+            await check_and_award_milestones(member, data)
+            bot.dispatch("study_session_ended", member, session_seconds)
+            await update_leaderboard_embed(bot.current_view_mode)
+
+            # Post-leave DM based on session length
+            try:
+                session_minutes = session_seconds // 60
+                today_hours = udata.get('total_seconds_today', 0) / 3600
+                ist_now = get_ist_now()
+
+                if session_minutes < 30:
+                    # Short session — come back nudge
+                    msg = discord.Embed(
+                        title="💨 Short Session Detected",
+                        description=f"Only **{session_minutes}m** this session. Breaks are fine — but come back within **10 minutes** and keep the momentum going!",
+                        color=0xFFA500
+                    )
+                    msg.add_field(name="⏱️ Session Length", value=f"{session_minutes}m", inline=True)
+                    msg.add_field(name="📊 Today's Total", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="💡 Tip", value="Even 25-minute Pomodoro sessions add up massively over a day!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • Come back soon!")
+                elif today_hours >= 6.0:
+                    # Champion territory
+                    msg = discord.Embed(
+                        title="🏆 Outstanding Session!",
+                        description=f"**{format_time_precise(session_seconds)}** session logged. And you're at **{today_hours:.1f}h** today — that's JEE champion territory!",
+                        color=0xFFD700
+                    )
+                    msg.add_field(name="🔥 Today's Total", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="🎯 JEE Target", value="6h+ ✅", inline=True)
+                    msg.add_field(name="💬 Reality Check", value="Top rankers put in days like this consistently. You're building the habit. Keep it up!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • You're on the right track!")
+                elif today_hours >= 3.0:
+                    # Good but need more
+                    msg = discord.Embed(
+                        title="✅ Good Session! Keep It Going",
+                        description=f"**{format_time_precise(session_seconds)}** banked. You're at **{today_hours:.1f}h** today — solid progress, but JEE minimum is 6h. You've got **{6-today_hours:.1f}h** to go!",
+                        color=0x57F287
+                    )
+                    msg.add_field(name="📊 Today So Far", value=f"{today_hours:.1f}h", inline=True)
+                    msg.add_field(name="🎯 6h Target", value=f"{6-today_hours:.1f}h remaining", inline=True)
+                    msg.add_field(name="⚡ Don't Stop", value="The gap between good and great is that extra session. Come back in 15 minutes!", inline=False)
+                    msg.set_footer(text="YPT Study Bot • Push for 6h!")
+                else:
+                    # Under 3h — needs to come back urgently
+                    msg = discord.Embed(
+                        title="⚡ Come Back Soon!",
+                        description=f"**{format_time_precise(session_seconds)}** session done. You're at **{today_hours:.1f}h** today. JEE needs **6h minimum** — you're still **{6-today_hours:.1f}h short**. Rest briefly and get back in!",
+                        color=0xEB459E
+                    )
+                    msg.add_field(name="📊 Today", value=f"{today_hours:.1f}h / 6h target", inline=True)
+                    msg.add_field(name="⏰ Remaining", value=f"{6-today_hours:.1f}h needed", inline=True)
+                    msg.set_footer(text="YPT Study Bot • Take a short break and return!")
+
+                dm_user = bot.get_user(member.id) or await bot.fetch_user(member.id)
+                if dm_user:
+                    await dm_user.send(embed=msg)
+            except Exception as dm_err:
+                logging.warning(f"Could not send post-leave DM to {member.display_name}: {dm_err}")
+
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
+
+        if _do_doubt_log:
+            log_info("DOUBT END", f"{format_time_precise(session_seconds)} in #{channel.name}", member)
+            await send_doubt_log(member, session_seconds, data, channel)
+            await check_and_award_doubt_milestones(member, data)
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
+
+        if _do_discussion_log:
+            logging.info(f"[DISCUSSION END] {member.display_name} -- {format_time_precise(session_seconds)} in #{channel.name}")
+            await send_discussion_log(member, session_seconds, data, channel)
+            await update_voice_channel_status(channel, None)
+            await update_bot_presence(data)
     except Exception as e:
         logging.error(f"Error handling voice leave for {member.display_name}: {e}")
 
@@ -2071,12 +2092,11 @@ async def weekly_graph_dm_loop():
             if now_ist.weekday() == 6 and now_ist.hour >= 21:
                 today_str = now_ist.date().isoformat()
                 
-                async with bot.db_write_lock:
-                    data = await load_data()
-                    if "meta" not in data:
-                        data["meta"] = {}
-                    last_send = data["meta"].get("last_weekly_graph_send")
-                    
+                data = await load_data()
+                if "meta" not in data:
+                    data["meta"] = {}
+                last_send = data["meta"].get("last_weekly_graph_send")
+                
                 if last_send != today_str:
                     logging.info("[WEEKLY GRAPH] Sunday 9 PM IST reached. Generating and sending weekly study graphs...")
                     await send_weekly_graphs()
@@ -2400,19 +2420,19 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
     try:
         await interaction.response.defer()
         target = user or interaction.user
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(target.id)
+        data = await load_data()
+        uid = str(target.id)
 
-            if uid not in data["users"]:
-                await interaction.followup.send(
-                    f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
-                    ephemeral=True,
-                )
-                return
+        if uid not in data["users"]:
+            await interaction.followup.send(
+                f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
+                ephemeral=True,
+            )
+            return
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
                 await save_data(data)
         accent_color = USER_COLORS.get(target.id, DEFAULT_COLOR)
         total_hours = udata.get("total_seconds_alltime", 0) / 3600
@@ -2689,13 +2709,13 @@ async def compare_command(interaction: discord.Interaction, user: discord.Member
 
         c_changed = False
         t_changed = False
-        async with bot.db_write_lock:
-            data = await load_data()
-            if caller_uid in data["users"]:
-                c_changed = enforce_user_resets(data["users"][caller_uid])
-            if target_uid in data["users"]:
-                t_changed = enforce_user_resets(data["users"][target_uid])
-            if c_changed or t_changed:
+        data = await load_data()
+        if caller_uid in data["users"]:
+            c_changed = enforce_user_resets(data["users"][caller_uid])
+        if target_uid in data["users"]:
+            t_changed = enforce_user_resets(data["users"][target_uid])
+        if c_changed or t_changed:
+            async with bot.db_write_lock:
                 await save_data(data)
 
         c = data["users"].get(caller_uid, _default_user(caller.display_name))
@@ -2928,16 +2948,16 @@ async def weekly_graph_command(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)
 
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(interaction.user.id)
+        data = await load_data()
+        uid = str(interaction.user.id)
 
-            if uid not in data["users"]:
-                await interaction.followup.send("📬 No study data found yet!", ephemeral=True)
-                return
+        if uid not in data["users"]:
+            await interaction.followup.send("📬 No study data found yet!", ephemeral=True)
+            return
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
                 await save_data(data)
 
         today = get_ist_date()
@@ -2986,19 +3006,19 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
     try:
         await interaction.response.defer()
         target = user or interaction.user
-        async with bot.db_write_lock:
-            data = await load_data()
-            uid = str(target.id)
+        data = await load_data()
+        uid = str(target.id)
 
-            if uid not in data["users"]:
-                await interaction.followup.send(
-                    f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
-                    ephemeral=True,
-                )
-                return
+        if uid not in data["users"]:
+            await interaction.followup.send(
+                f"📭 No study data found for **{target.display_name}**. They need to join a voice channel first!",
+                ephemeral=True,
+            )
+            return
 
-            udata = data["users"][uid]
-            if enforce_user_resets(udata):
+        udata = data["users"][uid]
+        if enforce_user_resets(udata):
+            async with bot.db_write_lock:
                 await save_data(data)
         today = get_ist_date()
         history = udata.get("daily_history", {})

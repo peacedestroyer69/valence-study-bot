@@ -42,10 +42,9 @@ for k in _ALL_KEYS:
         _KEYS.append(k)
 
 _MODEL_PREFERENCE = [
-    "gemini-2.5-pro",
+    "gemini-3.5-flash",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite"
+    "gemini-2.5-flash-lite"
 ]
 
 _current_key_idx = 0
@@ -228,11 +227,11 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
     """
     if is_weekly:
         challenge_desc = "an extremely difficult, deep conceptual weekly mega puzzle (covering mathematics, advanced science, logic, or programming). It must require multi-step logical deduction or deep conceptual understanding, and have no time limit to solve. It should be challenging even for very smart students. You have no token limit. Explain the problem, choices, and solution in extreme depth with full mathematical/logical rigor."
-        pref = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
+        pref = ["gemini-3.5-flash", "gemini-2.5-flash"]
         tokens = 3072
     elif topic == "logic":
         challenge_desc = "a tricky logic puzzle or lateral thinking brain teaser — no equations needed. Keep the question, options, and explanation extremely brief and concise (under 80 words total). Do not write long introductions. Save tokens."
-        pref = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"]
+        pref = ["gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
         tokens = 512
     else:
         topic_map = {
@@ -241,7 +240,7 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
         }
         topic_desc = topic_map.get(topic, topic_map["mixed"])
         challenge_desc = f"{topic_desc} suitable for Indian JEE aspirants (age 16-18), solvable in under 2 minutes. Keep the explanation reasonable and precise."
-        pref = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        pref = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
         tokens = 1536
 
     for attempt in range(3):
@@ -431,55 +430,151 @@ Respond ONLY with a JSON object:
 # ============================================================
 
 async def personalized_kick_msg(username: str, hours_today: float, hours_alltime: float, streak: int, puzzle_solved: bool, missed_days: int) -> str:
-    return (
+    prompt = f"""Write a brutal, toxic, yet highly motivating wake-up kick message for a JEE aspirant named {username} who failed to solve the daily puzzle.
+
+Context:
+- They studied {hours_today:.1f}h today.
+- They have {hours_alltime:.1f}h all-time.
+- Their study streak was {streak} days.
+- They missed {missed_days} consecutive days of study/puzzle solving.
+
+Rules:
+- 3 sentences MAX.
+- Tone: Extremely blunt, disappointed, high-standards, JEE-focused. Point out that JEE ranks aren't won by slackers.
+- Use their actual stats (hours today, alltime, streak) to critique them.
+- Tell them to use `/verify` and solve 3 archived puzzles to prove they belong back.
+- Plain text only, no markdown."""
+
+    fallback = (
         f"{username}, you missed the puzzle and barely showed up today. "
         f"This server exists for serious JEE aspirants, and right now you're not acting like one. "
         f"Your {hours_alltime:.0f} hours all-time should mean more than this. "
         f"Use /verify to rejoin — solve 3 puzzles and prove you belong here."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def personalized_wakeup_msg(username: str, yesterday_hours: float, streak: int, goal_hours: float) -> str:
-    return (
+    prompt = f"""Write a short, sharp 6 AM wake-up study reminder for a JEE aspirant named {username}.
+
+Context:
+- Yesterday they studied {yesterday_hours:.1f}h.
+- Their current streak is {streak} days.
+- Their daily study goal is {goal_hours:.1f}h.
+
+Rules:
+- 2 sentences MAX.
+- Tone: Action-oriented, direct, motivating.
+- Reference their yesterday's study hours: if yesterday was 0, be harsh/demanding; if yesterday was good, be encouraging but remind them today starts at 0.
+- End with a strong call to action to get in a study voice channel immediately.
+- Plain text only."""
+
+    fallback = (
         f"It's 6 AM, {username}. "
         f"{'Yesterday was ' + str(round(yesterday_hours, 1)) + 'h — build on it today.' if yesterday_hours > 0 else 'Yesterday was a zero. Today is your redemption.'} "
         f"Open your notes and get in a study VC now."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def dropped_off_reminder(username: str, hours_today: float, goal_hours: float, hours_left: float, time_str: str, peer_name: str = "", peer_hours: float = 0.0) -> str:
     gap = max(0.0, goal_hours - hours_today)
-    return (
+    peer_ctx = f"Their study partner {peer_name} currently has {peer_hours:.1f}h today." if peer_name else ""
+
+    prompt = f"""Write a short, encouraging Discord DM for a JEE aspirant named {username} who studied {hours_today:.1f}h today but has stopped and left their study channel.
+
+Context: It's {time_str} IST. They're {gap:.1f}h short of their {goal_hours:.1f}h daily goal. {hours_left:.1f}h left in the day. {peer_ctx}
+
+Tone: Warm but urgent. They showed up — acknowledge that. Push them to come back and finish.
+- 2-3 sentences MAX
+- Reference their actual hours
+- End with a specific call to action
+- Plain text only, no markdown"""
+
+    fallback = (
         f"Good start with {hours_today:.1f}h, {username}! "
         f"You're only {gap:.1f}h away from your daily goal — don't let today's effort go to waste. "
         f"Get back in a study channel and finish what you started."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def not_started_reminder(username: str, time_str: str, goal_hours: float, hours_left: float, peer_name: str = "", peer_hours: float = 0.0) -> str:
-    return (
+    peer_ctx = f"{peer_name} already has {peer_hours:.1f}h logged today." if peer_name else ""
+
+    prompt = f"""Write a blunt, no-nonsense Discord DM to a JEE aspirant named {username} who has studied ZERO hours today.
+
+Context: It's {time_str} IST. Their daily goal is {goal_hours:.1f}h. {hours_left:.1f}h left in the day. {peer_ctx}
+
+Rules:
+- 3 sentences MAXIMUM
+- No sympathy — zero hours is unacceptable
+- Be specific: mention it's {time_str} and they have {hours_left:.1f}h left
+- End with: get in a study channel RIGHT NOW
+- Plain text only, no markdown, vary the phrasing each time"""
+
+    fallback = (
         f"{username}, it's {time_str} and you have 0 hours studied today. "
         f"{'Your partner ' + peer_name + ' already has ' + str(round(peer_hours, 1)) + 'h. ' if peer_name else ''}"
         f"Get in a study channel right now — {hours_left:.1f}h left in the day."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def goal_congrats_msg(username: str, hours_today: float, goal_hours: float) -> str:
-    return (
+    prompt = f"""Write a genuine, energetic congratulations Discord DM for a JEE aspirant named {username} who just crossed their daily study goal.
+
+Stats: Studied {hours_today:.1f}h today, goal was {goal_hours:.1f}h.
+
+Rules:
+- 2-3 sentences MAX
+- Genuine praise, not hollow
+- Acknowledge specifically how much they did
+- End by telling them they've earned their rest — no more reminders today
+- Plain text only"""
+
+    fallback = (
         f"You did it, {username}! {hours_today:.1f}h today — goal hit. "
         f"That's the kind of consistency that builds rank. Rest up, no more reminders from me today."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def push_past_limit_msg(username: str, hours_today: float, goal_hours: float, hours_left: float) -> str:
     extra_target = goal_hours + 2.0
-    return (
+
+    prompt = f"""Write a hype, challenge-style Discord DM for a JEE aspirant named {username} who just hit their {goal_hours:.1f}h daily goal and has {hours_left:.1f}h left in the day.
+
+Goal: Push them to keep going beyond the goal. Top rankers don't stop at the minimum.
+
+Rules:
+- 2-3 sentences MAX
+- Challenging and motivating, topper energy
+- Reference that they have {hours_left:.1f}h left — why stop now?
+- Suggest pushing to {extra_target:.0f}h total
+- Plain text only, no markdown"""
+
+    fallback = (
         f"Goal hit — but why stop at {goal_hours:.1f}h, {username}? "
         f"You've got {hours_left:.1f}h left today. "
         f"Toppers push to {extra_target:.0f}h+ on good days. One more session."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 async def personalized_study_reminder(username: str, hours_today: float, goal_hours: float, time_str: str, peer_name: str = "", peer_hours: float = 0.0) -> str:
     gap = max(0.0, goal_hours - hours_today)
-    return (
+    peer_ctx = f"{peer_name} has {peer_hours:.1f}h today." if peer_name else ""
+
+    prompt = f"""Write a short, direct study reminder Discord DM for a JEE aspirant named {username}.
+
+Context: It's {time_str} IST. Studied {hours_today:.1f}h today. Goal: {goal_hours:.1f}h. {"Behind by " + str(round(gap, 1)) + "h." if gap > 0 else "GOAL ALREADY HIT — push further."} {peer_ctx}
+
+Rules:
+- 2 sentences MAX
+- Direct, no filler words
+- Reference their actual numbers
+- Plain text only"""
+
+    fallback = (
         f"It's {time_str}, {username} — {hours_today:.1f}h done, "
         f"{gap:.1f}h to go. Get back in a study channel."
     )
+    return await _call_gemini(prompt, fallback=fallback, max_output_tokens=256)
 
 
 # ============================================================

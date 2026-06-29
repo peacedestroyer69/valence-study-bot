@@ -104,6 +104,7 @@ class GamificationCog(commands.Cog):
         await self.sync_level_roles(member, level)
 
         # 2. Check active weekly Co-Op Boss
+        hit_info = None
         async with self.bot.db_write_lock:
             data = await self.bot.load_data()
             meta = data.setdefault("meta", {})
@@ -115,17 +116,19 @@ class GamificationCog(commands.Cog):
                     damages = boss.setdefault("damages", {})
                     damages[uid] = damages.get(uid, 0) + damage
                     await self.bot.save_data(data)
-                    
-                    # Announce boss hit in general channel
-                    channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
-                    if channel:
-                        embed = discord.Embed(
-                            title="💥 BOSS HIT!",
-                            description=f"⚔️ **{member.display_name}** dealt **{damage}** damage to **{boss['name']}**!\n"
-                                        f"❤️ Boss HP: **{boss['hp']} / {boss['max_hp']}**",
-                            color=0xED4245 if boss['hp'] > 0 else 0x57F287
-                        )
-                        await channel.send(embed=embed)
+                    hit_info = {"name": boss['name'], "hp": boss['hp'], "max_hp": boss['max_hp'], "damage": damage}
+
+        # Announce boss hit outside the lock
+        if hit_info:
+            channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
+            if channel:
+                embed = discord.Embed(
+                    title="💥 BOSS HIT!",
+                    description=f"⚔️ **{member.display_name}** dealt **{hit_info['damage']}** damage to **{hit_info['name']}**!\n"
+                                f"❤️ Boss HP: **{hit_info['hp']} / {hit_info['max_hp']}**",
+                    color=0xED4245 if hit_info['hp'] > 0 else 0x57F287
+                )
+                await channel.send(embed=embed)
 
     # ------------------------------------------------------------------
     # 1. CO-OP BOSS BATTLES SYSTEM
@@ -197,6 +200,7 @@ class GamificationCog(commands.Cog):
 
             # Wednesday 9 PM IST - Spawn Boss
             if now_ist.weekday() == 2 and now_ist.hour == 21:
+                spawned_boss_name = None
                 async with self.bot.db_write_lock:
                     data = await self.bot.load_data()
                     meta = data.setdefault("meta", {})
@@ -214,21 +218,25 @@ class GamificationCog(commands.Cog):
                         }
                         meta["last_boss_spawn_date"] = today_str
                         await self.bot.save_data(data)
-                        
-                        channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
-                        if channel:
-                            embed = discord.Embed(
-                                title="🚨 NEW BOSS SPAWNED! 🚨",
-                                description=f"The **{boss_name}** has entered the server!\n"
-                                            f"❤️ **HP: 480** (8 hours of combined studying required)\n"
-                                            f"⚔️ Study in the VC or use Pomodoro to deal damage! 1 minute = 1 damage.",
-                                color=0xED4245,
-                                timestamp=datetime.datetime.now(datetime.UTC)
-                            )
-                            await channel.send(embed=embed)
+                        spawned_boss_name = boss_name
+
+                # Announce outside the lock
+                if spawned_boss_name:
+                    channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
+                    if channel:
+                        embed = discord.Embed(
+                            title="🚨 NEW BOSS SPAWNED! 🚨",
+                            description=f"The **{spawned_boss_name}** has entered the server!\n"
+                                        f"❤️ **HP: 480** (8 hours of combined studying required)\n"
+                                        f"⚔️ Study in the VC or use Pomodoro to deal damage! 1 minute = 1 damage.",
+                            color=0xED4245,
+                            timestamp=datetime.datetime.now(datetime.UTC)
+                        )
+                        await channel.send(embed=embed)
 
             # Thursday 9 PM IST - Resolve Battle
             elif now_ist.weekday() == 3 and now_ist.hour == 21:
+                resolve_info = None
                 async with self.bot.db_write_lock:
                     data = await self.bot.load_data()
                     meta = data.setdefault("meta", {})
@@ -239,39 +247,43 @@ class GamificationCog(commands.Cog):
                         name = boss.get("name", "Boss")
                         hp = boss.get("hp", 0)
                         
-                        channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
-                        if channel:
-                            if hp <= 0:
-                                # Victorious! Reward participants with "Titan Slayer" badge
-                                embed = discord.Embed(
-                                    title="🏆 BOSS DEFEATED! VICTORY! 🏆",
-                                    description=f"You successfully defeated **{name}**!\n"
-                                                f"🎁 Every contributor has been awarded the **Boss Slayer** badge!",
-                                    color=0x57F287,
-                                    timestamp=datetime.datetime.now(datetime.UTC)
-                                )
-                                await channel.send(embed=embed)
-                                
-                                # Award badges
-                                for uid_str in boss.get("damages", {}).keys():
-                                    udata = data["users"].setdefault(uid_str, {})
-                                    badges = udata.setdefault("unlocked_badges", [])
-                                    if "Boss Slayer" not in badges:
-                                        badges.append("Boss Slayer")
-                            else:
-                                embed = discord.Embed(
-                                    title="💀 BOSS ESCAPED! DEFEAT! 💀",
-                                    description=f"You failed to defeat **{name}** in time.\n"
-                                                f"❌ Remaining HP: **{hp} / 480**\n"
-                                                f"Get back to studying, slackers!",
-                                    color=0x99AAB5,
-                                    timestamp=datetime.datetime.now(datetime.UTC)
-                                )
-                                await channel.send(embed=embed)
+                        if hp <= 0:
+                            # Award badges
+                            for uid_str in boss.get("damages", {}).keys():
+                                udata = data["users"].setdefault(uid_str, {})
+                                badges = udata.setdefault("unlocked_badges", [])
+                                if "Boss Slayer" not in badges:
+                                    badges.append("Boss Slayer")
 
                         meta["active_boss"] = None
                         meta["last_boss_resolution_date"] = today_str
                         await self.bot.save_data(data)
+                        resolve_info = {"name": name, "hp": hp}
+
+                # Announce outside the lock
+                if resolve_info:
+                    channel = self.bot.get_channel(GENERAL_CHANNEL_ID)
+                    if channel:
+                        if resolve_info["hp"] <= 0:
+                            # Victorious! Reward participants with "Titan Slayer" badge
+                            embed = discord.Embed(
+                                title="🏆 BOSS DEFEATED! VICTORY! 🏆",
+                                description=f"You successfully defeated **{resolve_info['name']}**!\n"
+                                            f"🎁 Every contributor has been awarded the **Boss Slayer** badge!",
+                                color=0x57F287,
+                                timestamp=datetime.datetime.now(datetime.UTC)
+                            )
+                            await channel.send(embed=embed)
+                        else:
+                            embed = discord.Embed(
+                                title="💀 BOSS ESCAPED! DEFEAT! 💀",
+                                description=f"You failed to defeat **{resolve_info['name']}** in time.\n"
+                                            f"❌ Remaining HP: **{resolve_info['hp']} / 480**\n"
+                                            f"Get back to studying, slackers!",
+                                color=0x99AAB5,
+                                timestamp=datetime.datetime.now(datetime.UTC)
+                            )
+                            await channel.send(embed=embed)
                         
         except Exception as e:
             logging.error(f"[BOSS BATTLE] Error in loop: {e}", exc_info=True)
