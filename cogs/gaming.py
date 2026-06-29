@@ -11,29 +11,88 @@ import asyncio
 import logging
 import json
 import os
-from bot import get_ist_now, IST_TZ
+import datetime
+import urllib.parse
+from utils import get_ist_now, IST_TZ, GAME_CHANNELS, POKE_TEXT_CHANNEL_ID, GENERAL_CHANNEL_ID, CHESS_TEXT_CHANNEL_ID
 
 # Top-level DB file operations removed. Using self.bot.load_data() and self.bot.save_data() instead.
 
 
-# Game voice channel IDs
-GAME_CHANNELS = {
-    1514624613743857775,  # Chess
-    1514624657935044738,  # Shogi
-    1514624725102628945,  # GO
-    1514624781692178683,  # Checkers
-}
+# Constants imported from utils.py
 
-# Text channel to send poke messages and match announcements
-CHESS_TEXT_CHANNEL_ID = 1514667734355542188  # Chess Text
-POKE_TEXT_CHANNEL_ID = 1514667734355542188   # Chess Text (poke goes here too)
+class GameResultConfirmationView(discord.ui.View):
+    def __init__(self, bot, winner: discord.Member, loser: discord.Member, reporter: discord.Member):
+        super().__init__(timeout=60.0)
+        self.bot = bot
+        self.winner = winner
+        self.loser = loser
+        self.reporter = reporter
 
-# General channel (fallback for announcements)
-GENERAL_CHANNEL_ID = 1514241642415001610  # #study-discussion text channel
+    @discord.ui.button(label="Confirm Result ✅", style=discord.ButtonStyle.success)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        verifier = self.loser if self.reporter.id == self.winner.id else self.winner
+        if interaction.user.id != verifier.id:
+            await interaction.response.send_message(f"❌ Only {verifier.mention} can confirm this match result!", ephemeral=True)
+            return
 
-# User IDs
-VALENCE_ID = "856485470171299891"
-UJJWAL_ID = "1403716456025165864"
+        self.stop()
+        await interaction.response.defer()
+
+        # Update DB under write lock
+        async with self.bot.db_write_lock:
+            data = await self.bot.load_data()
+            
+            # Ensure users initialized correctly
+            for uid in [str(self.winner.id), str(self.loser.id)]:
+                if uid not in data.setdefault("users", {}):
+                    # We obtain the member object to ensure user profile
+                    guild = interaction.guild
+                    m = guild.get_member(int(uid)) if guild else None
+                    if m:
+                        self.bot.ensure_user(data, m)
+                    else:
+                        data["users"][uid] = self.bot._default_user(self.winner.display_name if int(uid) == self.winner.id else self.loser.display_name)
+                data["users"][uid].setdefault("gaming_wins", 0)
+                data["users"][uid].setdefault("gaming_losses", 0)
+
+            data["users"][str(self.winner.id)]["gaming_wins"] += 1
+            data["users"][str(self.loser.id)]["gaming_losses"] += 1
+            await self.bot.save_data(data)
+
+        w_wins = data["users"][str(self.winner.id)]["gaming_wins"]
+        w_losses = data["users"][str(self.winner.id)]["gaming_losses"]
+        l_wins = data["users"][str(self.loser.id)]["gaming_wins"]
+        l_losses = data["users"][str(self.loser.id)]["gaming_losses"]
+
+        embed = discord.Embed(
+            title="🏆 MATCH RESULT CONFIRMED 🏆",
+            description=(
+                f"**{self.winner.mention}** defeated **{self.loser.mention}**!\n\n"
+                f"📊 **{self.winner.display_name}**: {w_wins}W / {w_losses}L\n"
+                f"📊 **{self.loser.display_name}**: {l_wins}W / {l_losses}L"
+            ),
+            color=0x10B981,
+            timestamp=datetime.datetime.now(datetime.UTC)
+        )
+        await interaction.message.edit(embed=embed, view=None)
+
+    @discord.ui.button(label="Decline Match ❌", style=discord.ButtonStyle.danger)
+    async def decline_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        verifier = self.loser if self.reporter.id == self.winner.id else self.winner
+        if interaction.user.id != verifier.id:
+            await interaction.response.send_message(f"❌ Only {verifier.mention} can decline this match result!", ephemeral=True)
+            return
+
+        self.stop()
+        embed = discord.Embed(
+            title="❌ MATCH RESULT DECLINED ❌",
+            description=f"Match result reported by {self.reporter.mention} was declined by {interaction.user.mention}.",
+            color=0xEF4444,
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def on_timeout(self):
+        pass
 
 
 class GamingCog(commands.Cog):
@@ -44,10 +103,10 @@ class GamingCog(commands.Cog):
         self._session = None
         self.chess_poll_loop.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.chess_poll_loop.cancel()
         if self._session and not self._session.closed:
-            asyncio.create_task(self._session.close())
+            await self._session.close()
 
     def get_session(self):
         if self._session is None or self._session.closed:
@@ -133,7 +192,7 @@ class GamingCog(commands.Cog):
     # SLASH COMMAND: /game_result
     # ------------------------------------------------------------------
     @app_commands.command(
-        name="game_result", description="Record the winner of a game."
+        name="game_result", description="Record the winner of a game (requires opponent confirmation)."
     )
     @app_commands.describe(
         winner="The player who won",
@@ -145,33 +204,33 @@ class GamingCog(commands.Cog):
         winner: discord.Member,
         loser: discord.Member,
     ):
-        await interaction.response.defer(ephemeral=False)
-        async with self.bot.db_write_lock:
-            data = await self.bot.load_data()
+        if winner.id == loser.id:
+            await interaction.response.send_message(
+                "❌ You cannot play a match against yourself!",
+                ephemeral=True,
+            )
+            return
 
-            for uid in [str(winner.id), str(loser.id)]:
-                if uid not in data["users"]:
-                    data["users"][uid] = {}
-                data["users"][uid].setdefault("gaming_wins", 0)
-                data["users"][uid].setdefault("gaming_losses", 0)
+        if interaction.user.id not in [winner.id, loser.id]:
+            await interaction.response.send_message(
+                "❌ You can only report match results for games you participated in!",
+                ephemeral=True,
+            )
+            return
 
-            data["users"][str(winner.id)]["gaming_wins"] += 1
-            data["users"][str(loser.id)]["gaming_losses"] += 1
-            await self.bot.save_data(data)
-
-        w_wins = data["users"][str(winner.id)]["gaming_wins"]
-        l_wins = data["users"][str(loser.id)]["gaming_wins"]
+        reporter = interaction.user
+        verifier = loser if reporter.id == winner.id else winner
 
         embed = discord.Embed(
-            title="🏆 MATCH RESULT 🏆",
+            title="🎮 MATCH RESULT REPORTED 🎮",
             description=(
-                f"**{winner.mention}** defeated **{loser.mention}**!\n\n"
-                f"📊 **{winner.display_name}**: {w_wins}W / {data['users'][str(winner.id)]['gaming_losses']}L\n"
-                f"📊 **{loser.display_name}**: {l_wins}W / {data['users'][str(loser.id)]['gaming_losses']}L"
+                f"**{reporter.mention}** has reported that **{winner.mention}** defeated **{loser.mention}**.\n\n"
+                f"⚠️ **{verifier.mention}**, please click below to confirm or decline this result."
             ),
-            color=0x57F287,
+            color=0xF59E0B,
         )
-        await interaction.followup.send(embed=embed)
+        view = GameResultConfirmationView(self.bot, winner, loser, reporter)
+        await interaction.response.send_message(embed=embed, view=view)
 
     # ------------------------------------------------------------------
     # SLASH COMMAND: /gaming_stats
@@ -222,17 +281,22 @@ class GamingCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ):
+        if member.bot:
+            return
+
         # Only trigger when someone JOINS a game channel (not when leaving or switching within)
         if after.channel and after.channel.id in GAME_CHANNELS:
             if not before.channel or before.channel.id not in GAME_CHANNELS:
                 await asyncio.sleep(5)
-                text_channel = await self.bot.get_or_fetch_channel(POKE_TEXT_CHANNEL_ID)
-                if text_channel:
-                    game_name = after.channel.name
-                    await text_channel.send(
-                        f"👀 Yo {member.mention}, hopping into **{game_name}**? "
-                        f"Start a match with `/game_match` so I can track it!"
-                    )
+                # Re-verify the member is still in that exact voice channel after 5 seconds
+                if member.voice and member.voice.channel and member.voice.channel.id == after.channel.id:
+                    text_channel = await self.bot.get_or_fetch_channel(POKE_TEXT_CHANNEL_ID)
+                    if text_channel:
+                        game_name = after.channel.name
+                        await text_channel.send(
+                            f"👀 Yo {member.mention}, hopping into **{game_name}**? "
+                            f"Start a match with `/game_match` so I can track it!"
+                        )
 
     # ------------------------------------------------------------------
     # BACKGROUND TASK: Poll Lichess API for auto-resolved matches
@@ -258,7 +322,8 @@ class GamingCog(commands.Cog):
             headers = {"Accept": "application/x-ndjson"}
             # Poll Lichess for each user's recent games
             for lichess_username, uid_str in lichess_map.items():
-                url = f"https://lichess.org/api/games/user/{lichess_username}?max=5"
+                safe_lichess_username = urllib.parse.quote(lichess_username)
+                url = f"https://lichess.org/api/games/user/{safe_lichess_username}?max=5"
                 try:
                     async with session.get(url, headers=headers) as resp:
                         if resp.status != 200:
