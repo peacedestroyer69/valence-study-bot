@@ -18,27 +18,17 @@ import datetime
 import logging
 import random
 
-from bot import get_ist_now, get_ist_date, IST_TZ, DAILY_GOAL_SECONDS
+from utils import (
+    get_ist_now, get_ist_date, IST_TZ, DAILY_GOAL_SECONDS,
+    STUDY_CHANNELS, DOUBT_CHANNELS, VALENCE_ID, UJJWAL_ID, STUDY_TEXT_CHANNELS,
+    GENERAL_CHANNEL_ID, STUDY_TEXT_CHANNEL_ID, SERVER_INVITE_LINK
+)
 from cogs import gemini_brain  # Gemini AI for personalized messages (graceful fallback if no key)
-
-import firebase_admin
-from firebase_admin import firestore
-
-# ---- Channel & User IDs ----
-VALENCE_ID = "856485470171299891"
-UJJWAL_ID = "1403716456025165864"
-GENERAL_CHANNEL_ID = 1514241642415001610  # #study-discussion text channel
-STUDY_TEXT_CHANNEL_ID = 1514241642415001610  # #study-discussion for public callouts
-
-# Study voice channels (used to check if someone is currently studying)
-STUDY_VOICE_CHANNELS = {1514208313452007514, 1514596473629708298, 1514244606827561171}
 
 # ---- Strike Config ----
 STRIKES_TO_WARN = 3
 STRIKES_TO_KICK = 4
 
-# ---- Permanent invite link ----
-SERVER_INVITE_LINK = None  # Will be set dynamically
 
 # ---- Study state constants ----
 STATE_CURRENTLY_STUDYING = "CURRENTLY_STUDYING"
@@ -46,7 +36,7 @@ STATE_DONE_ENOUGH        = "DONE_ENOUGH"
 STATE_DROPPED_OFF        = "DROPPED_OFF"
 STATE_NOT_STARTED        = "NOT_STARTED"
 
-# "Done enough" = user has crossed their daily goal (imported from bot.py, default 1.5h = 5400s)
+# "Done enough" = user has crossed their daily goal (imported from utils.py)
 DONE_ENOUGH_SECONDS = DAILY_GOAL_SECONDS
 
 # ---- Off-day weekdays ----
@@ -238,14 +228,21 @@ class DisciplineCog(commands.Cog):
 
         return "*(Could not generate invite link \u2014 ask your friend to re-invite you)*"
 
-    def _is_user_studying(self, guild: discord.Guild, user_id: int) -> bool:
+    async def _is_user_studying(self, guild: discord.Guild, user_id: int) -> bool:
         """Check if a user is currently in any study voice channel."""
         member = guild.get_member(user_id)
+        if not member:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                member = None
         if member and member.voice and member.voice.channel:
-            return member.voice.channel.id in STUDY_VOICE_CHANNELS
+            cid = member.voice.channel.id
+            from utils import POMODORO_CHANNEL_ID
+            return cid in STUDY_CHANNELS or cid in DOUBT_CHANNELS or cid == POMODORO_CHANNEL_ID
         return False
 
-    def _get_user_study_state(
+    async def _get_user_study_state(
         self,
         guild: discord.Guild,
         uid_str: str,
@@ -254,10 +251,10 @@ class DisciplineCog(commands.Cog):
     ) -> str:
         """
         Returns one of:
-          STATE_CURRENTLY_STUDYING  -- active voice-channel session in progress
-          STATE_DONE_ENOUGH         -- >= 3 h studied today (10 800 s)
-          STATE_DROPPED_OFF         -- studied some today (> 0 s, < 10 800 s) but NOT currently studying
-          STATE_NOT_STARTED         -- 0 s today and NOT currently studying
+        STATE_CURRENTLY_STUDYING  -- active voice-channel session in progress
+        STATE_DONE_ENOUGH         -- >= daily goal seconds studied today
+        STATE_DROPPED_OFF         -- studied some today but NOT currently studying
+        STATE_NOT_STARTED         -- 0 s today and NOT currently studying
         """
         # 1. Check live voice presence first
         try:
@@ -265,7 +262,12 @@ class DisciplineCog(commands.Cog):
         except ValueError:
             uid_int = None
 
-        if uid_int is not None and self._is_user_studying(guild, uid_int):
+        if uid_int is not None and await self._is_user_studying(guild, uid_int):
+            return STATE_CURRENTLY_STUDYING
+
+        # 1.5 Check if they have an active personal Pomodoro running
+        active_pomo = getattr(self.bot, "active_pomodoros", {})
+        if uid_int is not None and uid_int in active_pomo:
             return STATE_CURRENTLY_STUDYING
 
         # 2. Also check the DB-level session flag (bot may not have cached the voice state yet)
@@ -311,14 +313,12 @@ class DisciplineCog(commands.Cog):
     # ==================================================================
     @tasks.loop(minutes=10)
     async def daily_discipline_check(self):
-        """Runs every 10 minutes. Fires punishment logic at midnight IST."""
+        """Runs every 10 minutes. Fires punishment logic once per day after midnight IST."""
         try:
             now_ist = get_ist_now()
             today_str = now_ist.date().isoformat()
 
-            # Only trigger in the 00:00-00:09 window
-            if now_ist.hour == 0 and now_ist.minute < 10:
-                # Check DB loop state to prevent re-execution on restart
+            async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
                 loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
                 if loop_state.get("discipline_check_date") == today_str:
@@ -326,10 +326,9 @@ class DisciplineCog(commands.Cog):
 
                 logging.info("[DISCIPLINE] Running daily midnight discipline check...")
                 loop_state["discipline_check_date"] = today_str
-                async with self.bot.db_write_lock:
-                    await self.bot.save_data(data)
+                await self.bot.save_data(data)
 
-                await self.execute_punishments()
+            await self.execute_punishments()
         except Exception as e:
             logging.error(f"[DISCIPLINE] Error in daily_discipline_check: {e}", exc_info=True)
 
@@ -351,9 +350,22 @@ class DisciplineCog(commands.Cog):
         now_ist = get_ist_now()
         yesterday = (now_ist.date() - datetime.timedelta(days=1)).isoformat()
 
+        today_midnight = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_midnight_ts = int(today_midnight.timestamp())
+
+        user_yesterday_seconds = {}
+        for uid, udata in users.items():
+            daily_hist = udata.get("daily_history") or {}
+            secs = daily_hist.get(yesterday, 0)
+            start_ts = udata.get("session_start_timestamp")
+            if start_ts is not None and start_ts < today_midnight_ts:
+                # Add yesterday's portion of the active session
+                secs += (today_midnight_ts - start_ts)
+            user_yesterday_seconds[uid] = secs
+
         # Sort users by yesterday's seconds to find comparison peers
         yesterday_ranked = sorted(
-            ((uid, udata.get("daily_history", {}).get(yesterday, 0)) for uid, udata in users.items()),
+            user_yesterday_seconds.items(),
             key=lambda x: x[1],
             reverse=True,
         )
@@ -363,7 +375,7 @@ class DisciplineCog(commands.Cog):
 
         for uid_str in list(users.keys()):
             my_data = users[uid_str]
-            my_seconds = my_data.get("daily_history", {}).get(yesterday, 0)
+            my_seconds = user_yesterday_seconds.get(uid_str, 0)
             strikes = my_data.get("discipline_strikes", 0)
 
             # Find the peer to compare against
@@ -551,8 +563,8 @@ class DisciplineCog(commands.Cog):
         try:
             now_ist = get_ist_now()
 
-            # Only fire in the first 5 minutes of the hour
-            if now_ist.minute >= 5:
+            # Allow a 15-minute window for robustness against brief restarts/downtime
+            if now_ist.minute >= 15:
                 return
 
             hour = now_ist.hour
@@ -567,14 +579,14 @@ class DisciplineCog(commands.Cog):
                 return
 
             # Prevent double-firing within the same hour using DB state
-            data = await self.bot.load_data()
-            loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
-            today_hour_str = f"{now_ist.date().isoformat()}_{hour}"
-            if loop_state.get("last_hourly_nag") == today_hour_str:
-                return
-
-            loop_state["last_hourly_nag"] = today_hour_str
             async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                today_hour_str = f"{now_ist.date().isoformat()}_{hour}"
+                if loop_state.get("last_hourly_nag") == today_hour_str:
+                    return
+
+                loop_state["last_hourly_nag"] = today_hour_str
                 await self.bot.save_data(data)
 
             logging.info(f"[DISCIPLINE] Hourly nag check at {hour}:00 IST")
@@ -592,7 +604,7 @@ class DisciplineCog(commands.Cog):
                 my_data = users[uid_str]
 
                 # STATE CHECK: skip users who are already grinding or done for the day
-                state = self._get_user_study_state(guild, uid_str, my_data, now_ist)
+                state = await self._get_user_study_state(guild, uid_str, my_data, now_ist)
                 if state in (STATE_CURRENTLY_STUDYING, STATE_DONE_ENOUGH):
                     logging.info(
                         f"[DISCIPLINE] Skipping hourly nag for {uid_str} — state={state}"
@@ -616,13 +628,10 @@ class DisciplineCog(commands.Cog):
                     continue
 
                 try:
-                    formatted_msg = await gemini_brain.personalized_study_reminder(
-                        username=my_data.get("username", "Student"),
-                        hours_today=my_today,
-                        goal_hours=goal_hours_nag,
-                        time_str=now_ist.strftime("%H:%M"),
-                        peer_name=other_name,
-                        peer_hours=other_today,
+                    formatted_msg = msg_template.format(
+                        other_name=other_name,
+                        other_today=other_today,
+                        my_today=my_today
                     )
 
                     embed_color = _urgency_color(hour)
@@ -672,10 +681,9 @@ class DisciplineCog(commands.Cog):
     # TASK 3: STUDY GAP REMINDER (every 30 minutes, 8 AM-11 PM IST)
     # Sends DROPPED_OFF or NOT_STARTED DMs with a 25-min per-user cooldown
     # ==================================================================
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=5)
     async def study_gap_reminder_loop(self):
-        """Every 30 minutes between 8 AM and 11 PM IST.
-        Sends motivational/aggressive DMs to users who have dropped off or not started."""
+        """Every 5 minutes. Checks if we should send gap reminders for the current hour (8 AM to 11 PM IST)."""
         try:
             now_ist = get_ist_now()
             hour = now_ist.hour
@@ -684,9 +692,18 @@ class DisciplineCog(commands.Cog):
             if not (8 <= hour < 23):
                 return
 
-            logging.info(f"[DISCIPLINE] study_gap_reminder_loop firing at {now_ist.strftime('%H:%M')} IST")
+            # Check if we already ran for this hour
+            async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                today_hour_str = f"{now_ist.date().isoformat()}_{hour}"
+                if loop_state.get("last_gap_reminder") == today_hour_str:
+                    return
 
-            data = await self.bot.load_data()
+                loop_state["last_gap_reminder"] = today_hour_str
+                await self.bot.save_data(data)
+
+            logging.info(f"[DISCIPLINE] study_gap_reminder_loop firing at {now_ist.strftime('%H:%M')} IST")
             users = data.get("users", {})
 
             general_channel = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
@@ -695,173 +712,173 @@ class DisciplineCog(commands.Cog):
                 return
             guild = general_channel.guild
 
-            today_str = now_ist.date().isoformat()
             time_now_str = now_ist.strftime("%H:%M")
+            today_str = now_ist.date().isoformat()
             hours_left = _hours_left_today(now_ist)
-
             for uid_str in list(users.keys()):
-                my_data = users[uid_str]
-
-                # STUDY STATE
-                state = self._get_user_study_state(guild, uid_str, my_data, now_ist)
-
-                # Skip if currently studying — never nag an active studier
-                if state == STATE_CURRENTLY_STUDYING:
-                    continue
-
-                # Resolve member early (needed for all branches)
                 try:
-                    uid_int = int(uid_str)
-                    member = guild.get_member(uid_int)
+                    my_data = users[uid_str]
+
+                    # STUDY STATE (must be awaited)
+                    state = await self._get_user_study_state(guild, uid_str, my_data, now_ist)
+
+                    # Skip if currently studying — never nag an active studier
+                    if state == STATE_CURRENTLY_STUDYING:
+                        continue
+
+                    # Resolve member early (needed for all branches)
+                    try:
+                        uid_int = int(uid_str)
+                        member = guild.get_member(uid_int)
+                        if not member:
+                            member = await guild.fetch_member(uid_int)
+                    except Exception:
+                        member = None
                     if not member:
-                        member = await guild.fetch_member(uid_int)
-                except Exception:
-                    member = None
-                if not member:
-                    continue
+                        continue
 
-                # Peer info and today's hours
-                other_name, other_hours = self._peer_info(users, uid_str, today_str)
-                seconds_today = my_data.get("daily_history", {}).get(today_str, 0)
-                hours_today = seconds_today / 3600
-                goal_seconds = my_data.get("daily_goal_seconds", DONE_ENOUGH_SECONDS)
-                goal_hours = goal_seconds / 3600
-                gap = max(0.0, goal_hours - hours_today)
+                    # Peer info and today's hours
+                    other_name, other_hours = self._peer_info(users, uid_str, today_str)
+                    daily_hist = my_data.get("daily_history") or {}
+                    seconds_today = daily_hist.get(today_str, 0)
+                    hours_today = seconds_today / 3600
+                    goal_seconds = my_data.get("daily_goal_seconds") or DONE_ENOUGH_SECONDS
+                    goal_hours = goal_seconds / 3600
+                    gap = max(0.0, goal_hours - hours_today)
 
-                # -------------------------------------------------------
-                # BRANCH 1: User crossed their daily goal → one-time congrats, then silence
-                # -------------------------------------------------------
-                if state == STATE_DONE_ENOUGH:
-                    congrats_date = self._congrats_sent.get(uid_str)
-                    if congrats_date == today_str:
-                        continue  # Already sent congrats today — stay silent
+                    # -------------------------------------------------------
+                    # BRANCH 1: User crossed their daily goal → one-time congrats, then silence
+                    # -------------------------------------------------------
+                    if state == STATE_DONE_ENOUGH:
+                        congrats_date = self._congrats_sent.get(uid_str)
+                        if congrats_date == today_str:
+                            continue  # Already sent congrats today — stay silent
 
-                    body = await gemini_brain.goal_congrats_msg(
-                        username=my_data.get("username", "Student"),
-                        hours_today=hours_today,
-                        goal_hours=goal_hours,
-                    )
+                        body_template = random.choice(GOAL_CROSSED_MESSAGES)
+                        body = body_template.format(
+                            hours_today=hours_today,
+                            goal_hours=goal_hours
+                        )
 
-                    embed = discord.Embed(
-                        title=f"🎉 Daily Goal Complete!",
-                        description=body,
-                        color=0x57F287,  # Green — positive achievement
-                    )
-                    embed.add_field(
-                        name="📊 Today's Stats",
-                        value=f"⏱️ Studied: **{hours_today:.1f}h**\n🎯 Goal: **{goal_hours:.1f}h** ✅\n💤 You've earned your rest.",
-                        inline=False,
-                    )
-                    embed.set_footer(text=f"YPT Study Bot • {time_now_str} IST — No more reminders for today!")
+                        embed = discord.Embed(
+                            title=f"🎉 Daily Goal Complete!",
+                            description=body,
+                            color=0x57F287,  # Green — positive achievement
+                        )
+                        embed.add_field(
+                            name="📊 Today's Stats",
+                            value=f"⏱️ Studied: **{hours_today:.1f}h**\n🎯 Goal: **{goal_hours:.1f}h** ✅\n💤 You've earned your rest.",
+                            inline=False,
+                        )
+                        embed.set_footer(text=f"YPT Study Bot • {time_now_str} IST — No more reminders for today!")
+
+                        try:
+                            await member.send(embed=embed)
+                            self._congrats_sent[uid_str] = today_str
+                            logging.info(f"[DISCIPLINE] Sent goal-congrats DM to {my_data.get('username', uid_str)}")
+
+                            # Follow up immediately with a "push past the limit" hype DM
+                            extra_hours = goal_hours + 2.0  # push target = goal + 2h
+                            push_template = random.choice(PUSH_PAST_LIMIT_MESSAGES)
+                            push_body = push_template.format(
+                                goal_hours=goal_hours,
+                                hours_left=hours_left,
+                                hours_today=hours_today,
+                                extra_hours=extra_hours
+                            )
+
+                            push_embed = discord.Embed(
+                                title="⚡ Now Push Past It.",
+                                description=push_body,
+                                color=0xFFD700,  # Gold — elite energy
+                            )
+                            push_embed.add_field(
+                                name="🏆 Topper Target",
+                                value=f"Your goal: **{goal_hours:.1f}h** ✅\nNext milestone: **{extra_hours:.0f}h**\nHours left today: **{hours_left:.1f}h**",
+                                inline=False,
+                            )
+                            push_embed.set_footer(text="YPT Study Bot • The goal was the floor, not the ceiling.")
+                            await member.send(push_embed)
+                            logging.info(f"[DISCIPLINE] Sent push-past-limit DM to {my_data.get('username', uid_str)}")
+
+                        except discord.Forbidden:
+                            logging.warning(f"[DISCIPLINE] Cannot DM {uid_str} for congrats")
+                        except Exception as e:
+                            logging.error(f"[DISCIPLINE] Congrats DM error for {uid_str}: {e}")
+                        continue
+
+                    # -------------------------------------------------------
+                    # BRANCH 2 & 3: Nag branches — check cooldown first
+                    # -------------------------------------------------------
+                    last_nag = self._gap_nag_sent.get(uid_str)
+                    if last_nag is not None:
+                        elapsed = (now_ist - last_nag).total_seconds()
+                        if elapsed < 25 * 60:
+                            continue
+
+                    embed_color = _urgency_color(hour)
+
+                    if state == STATE_DROPPED_OFF:
+                        # Encouraging reminder from static template
+                        body_template = random.choice(DROPPED_OFF_MESSAGES)
+                        body = body_template.format(
+                            hours_today=hours_today,
+                            goal_hours=goal_hours,
+                            gap=gap,
+                            time_now=time_now_str
+                        )
+
+                        embed = discord.Embed(
+                            title=f"💪 {time_now_str} IST — Keep Going!",
+                            description=body,
+                            color=0xFEE75C,  # Yellow — warm, encouraging
+                        )
+                        embed.add_field(
+                            name="📊 Your Progress",
+                            value=f"`✅ Studied: **{hours_today:.1f}h**\n🎯 Goal: **{goal_hours:.1f}h**\n📈 Remaining: **{gap:.1f}h**",
+                            inline=False,
+                        )
+                        embed.set_footer(
+                            text=f"Your today: {hours_today:.1f}h  |  Goal: {goal_hours:.1f}h  |  {time_now_str} IST"
+                        )
+
+                    elif state == STATE_NOT_STARTED:
+                        # Harsh reminder from static template
+                        body_template = random.choice(NOT_STARTED_MESSAGES)
+                        body = body_template.format(
+                            time_now=time_now_str,
+                            other_name=other_name,
+                            other_hours=other_hours
+                        )
+
+                        embed = discord.Embed(
+                            title=f"🔴 {time_now_str} IST — You Haven't Started.",
+                            description=body,
+                            color=0xFF0000,
+                        )
+                        embed.add_field(
+                            name="⏰ Time's Running Out",
+                            value=f"📅 Today's goal: **{goal_hours:.1f}h**\n⌛ Hours left today: **{hours_left:.1f}h**\n{other_name} already has **{other_hours:.1f}h** logged.",
+                            inline=False,
+                        )
+                        embed.set_footer(
+                            text=f"{other_name}'s today: {other_hours:.1f}h  |  {time_now_str} IST"
+                        )
+                    else:
+                        continue
 
                     try:
                         await member.send(embed=embed)
-                        self._congrats_sent[uid_str] = today_str
-                        logging.info(f"[DISCIPLINE] Sent goal-congrats DM to {my_data.get('username', uid_str)}")
-
-                        # Follow up immediately with a "push past the limit" hype DM
-                        extra_hours = goal_hours + 2.0  # push target = goal + 2h
-                        push_body = await gemini_brain.push_past_limit_msg(
-                            username=my_data.get("username", "Student"),
-                            hours_today=hours_today,
-                            goal_hours=goal_hours,
-                            hours_left=hours_left,
+                        self._gap_nag_sent[uid_str] = now_ist
+                        logging.info(
+                            f"[DISCIPLINE] Sent gap reminder ({state}) to {my_data.get('username', uid_str)}"
                         )
-
-                        push_embed = discord.Embed(
-                            title="⚡ Now Push Past It.",
-                            description=push_body,
-                            color=0xFFD700,  # Gold — elite energy
-                        )
-                        push_embed.add_field(
-                            name="🏆 Topper Target",
-                            value=f"Your goal: **{goal_hours:.1f}h** ✅\nNext milestone: **{extra_hours:.0f}h**\nHours left today: **{hours_left:.1f}h**",
-                            inline=False,
-                        )
-                        push_embed.set_footer(text="YPT Study Bot • The goal was the floor, not the ceiling.")
-                        await member.send(embed=push_embed)
-                        logging.info(f"[DISCIPLINE] Sent push-past-limit DM to {my_data.get('username', uid_str)}")
-
                     except discord.Forbidden:
-                        logging.warning(f"[DISCIPLINE] Cannot DM {uid_str} for congrats")
+                        logging.warning(f"[DISCIPLINE] Cannot DM {uid_str} for gap reminder")
                     except Exception as e:
-                        logging.error(f"[DISCIPLINE] Congrats DM error for {uid_str}: {e}")
-                    continue
-
-                # -------------------------------------------------------
-                # BRANCH 2 & 3: Nag branches — check cooldown first
-                # -------------------------------------------------------
-                last_nag = self._gap_nag_sent.get(uid_str)
-                if last_nag is not None:
-                    elapsed = (now_ist - last_nag).total_seconds()
-                    if elapsed < 25 * 60:
-                        continue
-
-                embed_color = _urgency_color(hour)
-
-                if state == STATE_DROPPED_OFF:
-                    # Gemini-generated encouraging reminder
-                    body = await gemini_brain.dropped_off_reminder(
-                        username=my_data.get("username", "Student"),
-                        hours_today=hours_today,
-                        goal_hours=goal_hours,
-                        hours_left=hours_left,
-                        time_str=time_now_str,
-                        peer_name=other_name,
-                        peer_hours=other_hours,
-                    )
-
-                    embed = discord.Embed(
-                        title=f"💪 {time_now_str} IST — Keep Going!",
-                        description=body,
-                        color=0xFEE75C,  # Yellow — warm, encouraging
-                    )
-                    embed.add_field(
-                        name="📊 Your Progress",
-                        value=f"✅ Studied: **{hours_today:.1f}h**\n🎯 Goal: **{goal_hours:.1f}h**\n📈 Remaining: **{gap:.1f}h**",
-                        inline=False,
-                    )
-                    embed.set_footer(
-                        text=f"Your today: {hours_today:.1f}h  |  Goal: {goal_hours:.1f}h  |  {time_now_str} IST"
-                    )
-
-                elif state == STATE_NOT_STARTED:
-                    # Gemini-generated harsh "you haven't started" reminder
-                    body = await gemini_brain.not_started_reminder(
-                        username=my_data.get("username", "Student"),
-                        time_str=time_now_str,
-                        goal_hours=goal_hours,
-                        hours_left=hours_left,
-                        peer_name=other_name,
-                        peer_hours=other_hours,
-                    )
-
-                    embed = discord.Embed(
-                        title=f"🔴 {time_now_str} IST — You Haven't Started.",
-                        description=body,
-                        color=0xFF0000,
-                    )
-                    embed.add_field(
-                        name="⏰ Time's Running Out",
-                        value=f"📅 Today's goal: **{goal_hours:.1f}h**\n⌛ Hours left today: **{hours_left:.1f}h**\n{other_name} already has **{other_hours:.1f}h** logged.",
-                        inline=False,
-                    )
-                    embed.set_footer(
-                        text=f"{other_name}'s today: {other_hours:.1f}h  |  {time_now_str} IST"
-                    )
-                else:
-                    continue
-
-                try:
-                    await member.send(embed=embed)
-                    self._gap_nag_sent[uid_str] = now_ist
-                    logging.info(
-                        f"[DISCIPLINE] Sent gap reminder ({state}) to {my_data.get('username', uid_str)}"
-                    )
-                except discord.Forbidden:
-                    logging.warning(f"[DISCIPLINE] Cannot DM {uid_str} for gap reminder")
-                except Exception as e:
-                    logging.error(f"[DISCIPLINE] Gap reminder error for {uid_str}: {e}")
+                        logging.error(f"[DISCIPLINE] Gap reminder error for {uid_str}: {e}")
+                except Exception as u_err:
+                    logging.error(f"[DISCIPLINE] Error checking user {uid_str} in gap reminder: {u_err}")
 
         except Exception as e:
             logging.error(f"[DISCIPLINE] Error in study_gap_reminder_loop: {e}", exc_info=True)
@@ -875,21 +892,21 @@ class DisciplineCog(commands.Cog):
     # ==================================================================
     @tasks.loop(minutes=10)
     async def daily_absence_callout(self):
-        """At 10 AM IST, mention users in the study text channel who didn't study yesterday."""
+        """Mention users in the study text channel who didn't study yesterday (run once per day, 10 AM IST or later)."""
         try:
             now_ist = get_ist_now()
 
-            # Only trigger at 10:00-10:09 AM IST
-            if now_ist.hour != 10 or now_ist.minute >= 10:
+            # Only trigger at 10 AM IST or later
+            if now_ist.hour < 10:
                 return
 
-            data = await self.bot.load_data()
-            loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
-            if loop_state.get("absence_callout_date") == now_ist.date().isoformat():
-                return
-
-            loop_state["absence_callout_date"] = now_ist.date().isoformat()
             async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                loop_state = data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})
+                if loop_state.get("absence_callout_date") == now_ist.date().isoformat():
+                    return
+
+                loop_state["absence_callout_date"] = now_ist.date().isoformat()
                 await self.bot.save_data(data)
 
             logging.info("[DISCIPLINE] Running daily absence callout...")
@@ -919,7 +936,8 @@ class DisciplineCog(commands.Cog):
                 if not member:
                     continue
 
-                yesterday_seconds = users[uid_str].get("daily_history", {}).get(yesterday, 0)
+                daily_hist = users[uid_str].get("daily_history") or {}
+                yesterday_seconds = daily_hist.get(yesterday, 0)
                 if yesterday_seconds == 0:
                     absent_mentions.append(f"<@{uid_str}>")
 
