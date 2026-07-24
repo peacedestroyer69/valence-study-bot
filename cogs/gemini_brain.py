@@ -84,10 +84,10 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
     # Strategy: Try each model across ALL keys before falling back to next model.
     # e.g. gemini-3.6-flash on key1..key6, then gemini-3.5-flash on key1..key6, etc.
     for model_name in pref:
-        model_is_404 = False  # If model doesn't exist, skip all keys for it
+        model_skip = False  # If model doesn't exist or is globally unavailable
         start_idx = _current_key_idx
         for attempt in range(len(_KEYS)):
-            if model_is_404:
+            if model_skip:
                 break
             key_idx = (start_idx + attempt) % len(_KEYS)
             key = _KEYS[key_idx]
@@ -115,17 +115,20 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                     return text
             except asyncio.TimeoutError:
                 logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out using '{model_name}' — trying next key")
-                continue  # try next key with same model
+                continue
             except Exception as e:
                 err_str = str(e).lower()
                 if "not found" in err_str or "404" in err_str or "not_found" in err_str:
-                    logging.warning(f"[GEMINI] Model '{model_name}' not available — falling back to next model")
-                    model_is_404 = True  # skip remaining keys for this model
+                    logging.warning(f"[GEMINI] Model '{model_name}' does not exist (404) — skipping to next model")
+                    model_skip = True
                     break
+                elif "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
+                    logging.warning(f"[GEMINI] '{model_name}' is overloaded (503) on key #{key_idx + 1} — trying next key")
+                    continue  # try next key, but if all fail we'll fall through to next model
                 elif "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} quota exceeded for '{model_name}' — trying next key")
                     await asyncio.sleep(1.0)
-                    continue  # try next key with same model
+                    continue
                 elif "deadline" in err_str or "timeout" in err_str:
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) for '{model_name}' — trying next key")
                     continue
@@ -133,12 +136,11 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                     logging.error(f"[GEMINI] Key #{key_idx + 1} auth error — skipping key. Error: {e}")
                     continue
                 else:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} unknown error with '{model_name}': {e} — trying next key")
+                    logging.warning(f"[GEMINI] Key #{key_idx + 1} error with '{model_name}': {e} — trying next key")
                     continue
 
-        if not model_is_404:
-            # All keys exhausted for this model, try next model
-            logging.warning(f"[GEMINI] All {len(_KEYS)} keys exhausted for '{model_name}' — falling back to next model")
+        if not model_skip:
+            logging.warning(f"[GEMINI] All {len(_KEYS)} keys failed for '{model_name}' — falling back to next model")
 
     logging.warning("[GEMINI] ❌ All models and all keys exhausted — using static fallback")
     return fallback
