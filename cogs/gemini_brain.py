@@ -80,22 +80,21 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
         return fallback
 
     pref = model_preference or _MODEL_PREFERENCE
-    keys_tried = set()
-    start_idx = _current_key_idx
-    attempt = 0
-    while len(keys_tried) < len(_KEYS):
-        key_idx = (start_idx + attempt) % len(_KEYS)
-        attempt += 1
-        if key_idx in keys_tried:
-            break
-        keys_tried.add(key_idx)
-        key = _KEYS[key_idx]
-        client = _get_client(key)
-        if client is None:
-            await _rotate_key()
-            continue
 
-        for model_name in pref:
+    # Strategy: Try each model across ALL keys before falling back to next model.
+    # e.g. gemini-3.6-flash on key1..key6, then gemini-3.5-flash on key1..key6, etc.
+    for model_name in pref:
+        model_is_404 = False  # If model doesn't exist, skip all keys for it
+        start_idx = _current_key_idx
+        for attempt in range(len(_KEYS)):
+            if model_is_404:
+                break
+            key_idx = (start_idx + attempt) % len(_KEYS)
+            key = _KEYS[key_idx]
+            client = _get_client(key)
+            if client is None:
+                continue
+
             try:
                 loop = asyncio.get_running_loop()
                 config = types.GenerateContentConfig(
@@ -112,28 +111,36 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                 )
                 text = response.text.strip() if response.text else ""
                 if text:
-                    logging.info(f"[GEMINI] Successful generation using model '{model_name}' on key #{key_idx + 1}")
+                    logging.info(f"[GEMINI] ✅ Success using '{model_name}' on key #{key_idx + 1}")
                     return text
             except asyncio.TimeoutError:
-                logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (asyncio) using '{model_name}' — trying next key")
-                break
+                logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out using '{model_name}' — trying next key")
+                continue  # try next key with same model
             except Exception as e:
                 err_str = str(e).lower()
-                if "deadline" in err_str or "timeout" in err_str:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) using '{model_name}': {e} — trying next key")
+                if "not found" in err_str or "404" in err_str or "not_found" in err_str:
+                    logging.warning(f"[GEMINI] Model '{model_name}' not available — falling back to next model")
+                    model_is_404 = True  # skip remaining keys for this model
                     break
-                elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str or "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
-                    logging.error(f"[GEMINI] Key #{key_idx + 1} quota/auth/block error using '{model_name}' — trying next model. Error: {e}")
-                    continue  # try next model with same key before rotating
-                elif "not found" in err_str or "404" in err_str or "not_found" in err_str:
-                    logging.warning(f"[GEMINI] Model '{model_name}' not found on key #{key_idx + 1} — trying next model")
-                    continue  # model doesn't exist, try next
+                elif "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
+                    logging.warning(f"[GEMINI] Key #{key_idx + 1} quota exceeded for '{model_name}' — trying next key")
+                    await asyncio.sleep(1.0)
+                    continue  # try next key with same model
+                elif "deadline" in err_str or "timeout" in err_str:
+                    logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) for '{model_name}' — trying next key")
+                    continue
+                elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str:
+                    logging.error(f"[GEMINI] Key #{key_idx + 1} auth error — skipping key. Error: {e}")
+                    continue
                 else:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} failed with '{model_name}': {e} — trying next model")
+                    logging.warning(f"[GEMINI] Key #{key_idx + 1} unknown error with '{model_name}': {e} — trying next key")
+                    continue
 
-        await _rotate_key()
+        if not model_is_404:
+            # All keys exhausted for this model, try next model
+            logging.warning(f"[GEMINI] All {len(_KEYS)} keys exhausted for '{model_name}' — falling back to next model")
 
-    logging.warning("[GEMINI] All keys and models exhausted — using static fallback")
+    logging.warning("[GEMINI] ❌ All models and all keys exhausted — using static fallback")
     return fallback
 
 # ============================================================
