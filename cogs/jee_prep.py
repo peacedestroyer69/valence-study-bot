@@ -6,7 +6,11 @@ import logging
 import random
 import os
 import asyncio
-import google.generativeai as genai
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
 from utils import (
     get_ist_now, get_ist_date, IST_TZ, UIColors,
     VALENCE_ID, UJJWAL_ID, DAILY_GOAL_SECONDS
@@ -59,13 +63,14 @@ class JEEPrepCog(commands.Cog):
         # Socratic AI contexts (user_id -> chat history list)
         self.doubt_contexts = {}
         
-        # Configure Gemini
+        # Configure Gemini client
         gemini_key = os.getenv("GEMINI_API_KEY", "")
-        if gemini_key:
-            genai.configure(api_key=gemini_key)
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
+        if gemini_key and genai is not None:
+            self.genai_client = genai.Client(api_key=gemini_key)
+            self.model_name = "gemini-3.5-flash"
         else:
-            self.model = None
+            self.genai_client = None
+            self.model_name = None
 
         self.weekly_audit_loop.start()
 

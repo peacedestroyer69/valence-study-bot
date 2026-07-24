@@ -14,11 +14,12 @@ import asyncio
 import random
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     _GENAI_AVAILABLE = True
 except ImportError:
     _GENAI_AVAILABLE = False
-    logging.warning("[GEMINI] google-generativeai not installed. Run: pip install google-generativeai")
+    logging.warning("[GEMINI] google-genai not installed. Run: pip install google-genai")
 
 # ---- Load all keys from env ----
 _ALL_KEYS = [
@@ -42,35 +43,28 @@ for k in _ALL_KEYS:
         _KEYS.append(k)
 
 _MODEL_PREFERENCE = [
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite"
 ]
 
 _current_key_idx = 0
-_cached_models: dict[tuple[str, str], object] = {}   # (key, model_name) -> GenerativeModel instance
+_cached_clients: dict[str, object] = {}   # key -> genai.Client instance
 _rotation_lock = asyncio.Lock()
-_init_lock = asyncio.Lock()  # Serialize model init
+_init_lock = asyncio.Lock()  # Serialize client init
 
-async def _get_model_instance(key: str, model_name: str):
-    """Returns the Gemini model instance for a key, initializing if needed."""
-    cache_key = (key, model_name)
-    if cache_key not in _cached_models:
-        async with _init_lock:
-            if cache_key in _cached_models:
-                return _cached_models[cache_key]
-            try:
-                from google.generativeai import client as genai_client
-                genai.configure(api_key=key)
-                model = genai.GenerativeModel(model_name)
-                model._client = genai_client.get_default_generative_client()
-                model._async_client = genai_client.get_default_generative_async_client()
-                _cached_models[cache_key] = model
-                logging.info(f"[GEMINI] Initialized model '{model_name}' for key (ends with ...{key[-8:]})")
-            except Exception as e:
-                logging.error(f"[GEMINI] Failed to init model '{model_name}' for key: {e}")
-                return None
-    return _cached_models[cache_key]
+def _get_client(key: str):
+    """Returns the genai.Client for a given API key, creating if needed."""
+    if key not in _cached_clients:
+        try:
+            client = genai.Client(api_key=key)
+            _cached_clients[key] = client
+            logging.info(f"[GEMINI] Initialized client for key (ends with ...{key[-8:]})")
+        except Exception as e:
+            logging.error(f"[GEMINI] Failed to init client for key: {e}")
+            return None
+    return _cached_clients[key]
 
 async def _rotate_key():
     """Rotate to the next available API key."""
@@ -78,6 +72,7 @@ async def _rotate_key():
     async with _rotation_lock:
         _current_key_idx = (_current_key_idx + 1) % max(len(_KEYS), 1)
         logging.warning(f"[GEMINI] Rotated to key #{_current_key_idx + 1}")
+        await asyncio.sleep(1.5)
 
 async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_preference: list = None, max_output_tokens: int = 1024) -> str:
     """Calls Gemini API with rotation, fallback, and max output tokens."""
@@ -95,24 +90,27 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
             break
         keys_tried.add(key_idx)
         key = _KEYS[key_idx]
+        client = _get_client(key)
+        if client is None:
+            await _rotate_key()
+            continue
 
         for model_name in pref:
-            model = await _get_model_instance(key, model_name)
-            if model is None:
-                continue
-
             try:
                 loop = asyncio.get_running_loop()
-                gen_config = {"max_output_tokens": max_output_tokens, "temperature": 0.7}
+                config = types.GenerateContentConfig(
+                    max_output_tokens=max_output_tokens,
+                    temperature=0.7,
+                )
                 response = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda m=model: m.generate_content(
-                        prompt,
-                        generation_config=gen_config,
-                        request_options={"timeout": timeout}
+                    loop.run_in_executor(None, lambda c=client, m=model_name, p=prompt, cfg=config: c.models.generate_content(
+                        model=m,
+                        contents=p,
+                        config=cfg,
                     )),
                     timeout=timeout + 2.0,
                 )
-                text = response.text.strip()
+                text = response.text.strip() if response.text else ""
                 if text:
                     logging.info(f"[GEMINI] Successful generation using model '{model_name}' on key #{key_idx + 1}")
                     return text
@@ -125,8 +123,11 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) using '{model_name}': {e} — trying next key")
                     break
                 elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str or "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
-                    logging.error(f"[GEMINI] Key #{key_idx + 1} quota/auth/block error — moving to next key. Error: {e}")
-                    break
+                    logging.error(f"[GEMINI] Key #{key_idx + 1} quota/auth/block error using '{model_name}' — trying next model. Error: {e}")
+                    continue  # try next model with same key before rotating
+                elif "not found" in err_str or "404" in err_str or "not_found" in err_str:
+                    logging.warning(f"[GEMINI] Model '{model_name}' not found on key #{key_idx + 1} — trying next model")
+                    continue  # model doesn't exist, try next
                 else:
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} failed with '{model_name}': {e} — trying next model")
 
