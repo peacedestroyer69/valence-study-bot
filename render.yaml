@@ -35,22 +35,3 @@ services:
       - key: GEMINI_API_KEY_6
         sync: false
 
-  - type: web
-    name: valence-task-bot
-    runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python task_bot.py
-    envVars:
-      - key: TASK_BOT_TOKEN
-        sync: false
-      - key: LEADERBOARD_CHANNEL_ID
-        sync: false
-      - key: LOG_CHANNEL_ID
-        sync: false
-      - key: CELEBRATION_CHANNEL_ID
-        sync: false
-      - key: FIREBASE_CREDENTIALS
-        sync: false
-      - key: PYTHON_VERSION
-        value: 3.10.12
