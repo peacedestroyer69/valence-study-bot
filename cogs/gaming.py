@@ -72,7 +72,7 @@ class GameResultConfirmationView(discord.ui.View):
                 f"📊 **{self.loser.display_name}**: {l_wins}W / {l_losses}L"
             ),
             color=0x10B981,
-            timestamp=datetime.datetime.now(datetime.UTC)
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         await interaction.message.edit(embed=embed, view=None)
 

@@ -192,7 +192,7 @@ class JEEPrepCog(commands.Cog):
         embed = discord.Embed(
             title=f"🎯 PYQ Performance Dashboard — {target.display_name}",
             color=UIColors.BRAND_PRIMARY,
-            timestamp=datetime.datetime.now(datetime.UTC)
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.description = f"📊 Total solved: **{total_q} questions**\n🎯 Overall Accuracy: **{overall_acc}%**\n⏱️ Average Pace: **{overall_pace} min/Q**"
 
@@ -283,7 +283,7 @@ class JEEPrepCog(commands.Cog):
             title="🏁 JEE Syllabus Progress Grid",
             description=f"🟥 Not Started | 🟨 Lectures Done | 🟧 Notes Done | 🟦 PYQs Done | 🟩 Mastered\n\n**Format:** `Chapter | {v_name} | {u_name}`",
             color=UIColors.BRAND_PRIMARY,
-            timestamp=datetime.datetime.now(datetime.UTC)
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
 
         for sub, chapters in JEE_SYLLABUS.items():
@@ -411,7 +411,7 @@ class JEEPrepCog(commands.Cog):
                     title="📊 WEEKLY PERFORMANCE REPORT CARD",
                     description=audit_report,
                     color=UIColors.BRAND_PRIMARY,
-                    timestamp=datetime.datetime.now(datetime.UTC)
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
                 )
                 embed.set_footer(text="Consistency builds rank. Keep grinding.")
                 

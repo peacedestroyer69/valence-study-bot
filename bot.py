@@ -571,7 +571,7 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
     if not sorted_users:
         embed.description = "No sessions recorded yet. Join a voice channel to get started!"
         embed.set_footer(text=f"Last updated: <t:{now_unix}:R>")
-        embed.timestamp = datetime.datetime.now(datetime.UTC)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
         return embed
 
     for rank, (uid, udata) in enumerate(sorted_users[:5], start=1):
@@ -684,7 +684,7 @@ def build_leaderboard_embed(data: dict, mode: str) -> discord.Embed:
             )
 
     embed.set_footer(text=f"Last updated: <t:{now_unix}:R>")
-    embed.timestamp = datetime.datetime.now(datetime.UTC)
+    embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
     return embed
 
@@ -890,7 +890,7 @@ async def send_session_log(member: discord.Member, session_seconds: int, data: d
             embed.color = 0x57F287  # Green for new PB
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.UTC)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await channel.send(embed=embed)
     except Exception as e:
@@ -994,7 +994,7 @@ async def send_doubt_log(member: discord.Member, session_seconds: int, data: dic
         )
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.UTC)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         tag_view = SubjectTagView(uid, session_seconds)
         await log_channel.send(embed=embed, view=tag_view)
@@ -1034,7 +1034,7 @@ async def send_discussion_log(member: discord.Member, session_seconds: int, data
         embed.add_field(name="\U0001f550 Total Discussion Time", value=format_time(total_disc), inline=True)
 
         embed.set_footer(text="Not everything has to be study. Chill is valid too.")
-        embed.timestamp = datetime.datetime.now(datetime.UTC)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await log_channel.send(embed=embed)
     except Exception as e:
@@ -1074,7 +1074,7 @@ async def send_pomodoro_session_log(member: discord.Member, study_seconds: int, 
         embed.add_field(name="\u231a Finished", value=f"<t:{unix_end}:R>", inline=True)
 
         embed.set_footer(text=quote)
-        embed.timestamp = datetime.datetime.now(datetime.UTC)
+        embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
 
         await channel.send(embed=embed)
     except Exception as e:
@@ -1226,7 +1226,7 @@ async def flush_message_buffer_loop():
                                                         f"Role **{role.name}** has been awarded!"
                                                     ),
                                                     color=0x3498DB,
-                                                    timestamp=datetime.datetime.now(datetime.UTC),
+                                                    timestamp=datetime.datetime.now(datetime.timezone.utc),
                                                 )
                                                 embed.set_thumbnail(url=member.display_avatar.url if member.display_avatar else None)
                                                 await channel.send(embed=embed)
@@ -1391,7 +1391,7 @@ async def check_weekly_reset(data: dict):
                                 f"**{format_time(winner_seconds)}** of study! 🔥🎉"
                             ),
                             color=0xFFD700,
-                            timestamp=datetime.datetime.now(datetime.UTC),
+                            timestamp=datetime.datetime.now(datetime.timezone.utc),
                         )
                         embed.set_footer(text="A new week begins. The grind resets. Go again. 💪")
                         await channel.send(embed=embed)
@@ -1465,7 +1465,7 @@ async def check_and_award_milestones(member: discord.Member, data: dict):
                                 f"Role **{role.name}** has been awarded!"
                             ),
                             color=0xFFD700,
-                            timestamp=datetime.datetime.now(datetime.UTC),
+                            timestamp=datetime.datetime.now(datetime.timezone.utc),
                         )
                         if member.display_avatar:
                             embed.set_thumbnail(url=member.display_avatar.url)
@@ -1534,7 +1534,7 @@ async def check_and_award_doubt_milestones(member: discord.Member, data: dict):
                                 f"Role **{role.name}** has been awarded!"
                             ),
                             color=0xFFA500,
-                            timestamp=datetime.datetime.now(datetime.UTC),
+                            timestamp=datetime.datetime.now(datetime.timezone.utc),
                         )
                         if member.display_avatar:
                             embed.set_thumbnail(url=member.display_avatar.url)
@@ -1966,7 +1966,7 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
                     f"Currently in Pomodoro: {mentions}"
                 ),
                 color=0xED4245,  # Red
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
             embed.set_footer(text="Heads down. Phones away. Let's go.")
         else:
@@ -1977,7 +1977,7 @@ async def send_pomodoro_alert(channel: discord.VoiceChannel, new_phase: str):
                     f"Currently in Pomodoro: {mentions}"
                 ),
                 color=0x57F287,  # Green
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
             embed.set_footer(text="Relax. Rest. Rehydrate.")
 
@@ -2006,7 +2006,7 @@ async def individual_pomodoro_loop(user_id: int):
                         title=f"\U0001f504 Pomodoro #{cycle_num} \u2014 Study Time!",
                         description=f"Focus for **{study_secs // 60} minutes**. Go!",
                         color=0xED4245,
-                        timestamp=datetime.datetime.now(datetime.UTC),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc),
                     )
                     await user.send(embed=embed)
             except Exception:
@@ -2040,7 +2040,7 @@ async def individual_pomodoro_loop(user_id: int):
                         title=f"\U0001f7e2 Pomodoro #{cycle_num} \u2014 Break Time!",
                         description=f"Nice work! Rest for **{break_secs // 60} minutes**.",
                         color=0x57F287,
-                        timestamp=datetime.datetime.now(datetime.UTC),
+                        timestamp=datetime.datetime.now(datetime.timezone.utc),
                     )
                     await user.send(embed=embed)
             except Exception:
@@ -2124,7 +2124,7 @@ async def individual_pomodoro_loop(user_id: int):
                             embed.add_field(name="📅 Date", value=f"<t:{int(time.time())}:D>", inline=True)
                             embed.add_field(name="⌚ Finished", value=f"<t:{int(time.time())}:R>", inline=True)
                             embed.set_footer(text=random.choice(MOTIVATIONAL_QUOTES))
-                            embed.timestamp = datetime.datetime.now(datetime.UTC)
+                            embed.timestamp = datetime.datetime.now(datetime.timezone.utc)
                             await log_ch.send(embed=embed)
                 except Exception as log_err:
                     logging.error(f"Error logging personal pomodoro session completion: {log_err}")
@@ -2209,7 +2209,7 @@ async def send_weekly_graphs():
                     f"🔥 Study days: **{sum(1 for h in hours if h > 0)}/7**"
                 ),
                 color=USER_COLORS.get(int(uid), DEFAULT_COLOR),
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
             embed.set_image(url="attachment://weekly_graph.png")
             embed.set_footer(text="New week, new grind. Let's go! 💪")
@@ -2231,7 +2231,7 @@ async def send_weekly_graphs():
                 title="\U0001f4ca Weekly Reports Sent!",
                 description="Check your DMs for your personalized weekly study graph! \U0001f4e9",
                 color=0x5865F2,
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
             await lb_channel.send(embed=embed)
     except Exception:
@@ -2514,7 +2514,7 @@ async def stats_command(interaction: discord.Interaction, user: discord.Member |
         embed = discord.Embed(
             title=f"{emblem} {target.display_name}'s Study Profile",
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         if target.display_avatar:
             embed.set_thumbnail(url=target.display_avatar.url)
@@ -2665,7 +2665,7 @@ async def goal_command(interaction: discord.Interaction, hours: float):
                 f"{generate_progress_bar(data['users'][uid].get('total_seconds_today', 0), goal_seconds)}"
             ),
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         embed.set_footer(text="Consistency is key. 💪")
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -2741,14 +2741,14 @@ async def whostudying_command(interaction: discord.Interaction):
                 title="🔇 Voice Channels",
                 description="Nobody is studying right now. Be the first!",
                 color=0x99AAB5,
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
         else:
             embed = discord.Embed(
                 title="🔊 Currently in Voice",
                 description="\n\n".join(lines),
                 color=0x57F287,
-                timestamp=datetime.datetime.now(datetime.UTC),
+                timestamp=datetime.datetime.now(datetime.timezone.utc),
             )
             embed.set_footer(text=f"{sum(len([m for m in vc.members if not m.bot]) for vc in guild.voice_channels)} people active")
 
@@ -2823,7 +2823,7 @@ async def compare_command(interaction: discord.Interaction, user: discord.Member
             title=f"⚔️ {caller.display_name} vs {user.display_name}",
             description="\n\n".join(lines),
             color=0x5865F2,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         embed.set_footer(text="◀️ = left leads  |  ▶️ = right leads  |  🤝 = tied")
 
@@ -2899,7 +2899,7 @@ async def pomo_start(interaction: discord.Interaction, study_min: int = 25, brea
                 f"\u26a0\ufe0f This will auto-cancel if you join the group Pomodoro channel."
             ),
             color=0xED4245,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -2944,7 +2944,7 @@ async def pomo_stop(interaction: discord.Interaction):
                 f"\U0001f4da Total study time: **{format_time(total_study)}**"
             ),
             color=0xFEE75C,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -2970,7 +2970,7 @@ async def pomo_status(interaction: discord.Interaction):
         embed = discord.Embed(
             title="\U0001f345 Pomodoro Status",
             color=0xED4245 if phase == "study" else 0x57F287,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         embed.add_field(
             name="\U0001f465 Group Pomodoro",
@@ -3058,7 +3058,7 @@ async def weekly_graph_command(interaction: discord.Interaction):
                 f"🔥 Study days: **{sum(1 for h in hours if h > 0)}/7**"
             ),
             color=USER_COLORS.get(interaction.user.id, DEFAULT_COLOR),
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         embed.set_image(url="attachment://weekly_graph.png")
         embed.set_footer(text="Keep grinding! 💪")
@@ -3148,7 +3148,7 @@ async def heatmap_command(interaction: discord.Interaction, user: discord.Member
             title=f"📅 {target.display_name}'s Study Heatmap",
             description=f"{calendar_text}\n\n{legend}",
             color=accent_color,
-            timestamp=datetime.datetime.now(datetime.UTC),
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
         embed.add_field(
             name="📊 This Month",
@@ -3369,9 +3369,10 @@ async def shutdown(sig=None):
 
     # 3. Clean up keep-alive runner
     global _keepalive_runner
-    if _keepalive_runner:
+    if _keepalive_runner is not None and hasattr(_keepalive_runner, 'cleanup'):
         try:
             await _keepalive_runner.cleanup()
+            _keepalive_runner = None
             logging.info("Keep-alive runner cleaned up successfully.")
         except Exception as e:
             logging.error(f"Error cleaning up keep-alive runner: {e}")

@@ -83,7 +83,7 @@ class GamificationCog(commands.Cog):
                         description=f"🔥 **{member.mention}** has advanced to **Level {level}**!\n"
                                     f"👑 New Rank Role Unlocked: **{target_role.mention}**",
                         color=target_role.color,
-                        timestamp=datetime.datetime.now(datetime.UTC)
+                        timestamp=datetime.datetime.now(datetime.timezone.utc)
                     )
                     embed.set_footer(text="The grind never stops. Onwards to the next rank!")
                     await channel.send(embed=embed)
@@ -160,7 +160,7 @@ class GamificationCog(commands.Cog):
             title=f"⚔️ WEEKLY CO-OP BOSS BATTLE: {name}",
             description=f"Collaborate with your partner to defeat the Boss by studying! 1 min studied = 1 damage dealt.",
             color=0xED4245 if hp > 0 else 0x57F287,
-            timestamp=datetime.datetime.now(datetime.UTC)
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         embed.add_field(
             name=f"❤️ Boss HP: {hp} / {max_hp} ({pct}%)",
@@ -240,7 +240,7 @@ class GamificationCog(commands.Cog):
                                         f"❤️ **HP: 480** (8 hours of combined studying required)\n"
                                         f"⚔️ Study in the VC or use Pomodoro to deal damage! 1 minute = 1 damage.",
                             color=0xED4245,
-                            timestamp=datetime.datetime.now(datetime.UTC)
+                            timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
                         await channel.send(embed=embed)
 
@@ -290,7 +290,7 @@ class GamificationCog(commands.Cog):
                             description=f"You successfully defeated **{resolve_info['name']}**!\n"
                                         f"🎁 Every contributor has been awarded the **Boss Slayer** badge!",
                             color=0x57F287,
-                            timestamp=datetime.datetime.now(datetime.UTC)
+                            timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
                         await channel.send(embed=embed)
                     else:
@@ -300,7 +300,7 @@ class GamificationCog(commands.Cog):
                                         f"❌ Remaining HP: **{resolve_info['hp']} / 480**\n"
                                         f"Get back to studying, slackers!",
                             color=0x99AAB5,
-                            timestamp=datetime.datetime.now(datetime.UTC)
+                            timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
                         await channel.send(embed=embed)
                         
@@ -328,7 +328,7 @@ class GamificationCog(commands.Cog):
         embed = discord.Embed(
             title=f"🏅 {target.display_name}'s Earned Badges",
             color=UIColors.BRAND_PRIMARY,
-            timestamp=datetime.datetime.now(datetime.UTC)
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
 
         if not badges:

@@ -169,7 +169,7 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
                 correct_answer = weekly_puzzle.get("answer", "A")
                 explanation = weekly_puzzle.get("explanation", "")
                 options = weekly_puzzle.get("options", {})
-                now_ts = datetime.datetime.now(datetime.UTC).timestamp()
+                now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
                 if chosen == correct_answer:
                     solvers[uid] = now_ts
@@ -487,7 +487,7 @@ class PuzzleCog(commands.Cog):
                 active["explanation"] = ""
                 active["solvers"] = {}
                 active["attempts"] = {}
-                active["posted_at"] = datetime.datetime.now(datetime.UTC).timestamp()
+                active["posted_at"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
                 await self.bot.save_data(data)
 
             logging.info(f"[PUZZLE] Generating weekly mega puzzle for week starting {expected_start_str}...")
@@ -535,7 +535,7 @@ class PuzzleCog(commands.Cog):
                 active["explanation"] = puzzle["explanation"]
                 active["solvers"] = {}
                 active["attempts"] = {}
-                active["posted_at"] = datetime.datetime.now(datetime.UTC).timestamp()
+                active["posted_at"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
                 active["message_id"] = msg.id
                 active["week_start_date"] = expected_start_str
 
@@ -583,7 +583,7 @@ class PuzzleCog(commands.Cog):
                 title="🏆 WEEKLY MEGA PUZZLE FINALE & LEADERBOARD",
                 description="Here is the breakdown of who tackled this week's extreme conceptual challenge!",
                 color=0x9B59B6,
-                timestamp=datetime.datetime.now(datetime.UTC)
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
 
             # 1. SHOUTOUTS (Solvers sorted by solve time)
