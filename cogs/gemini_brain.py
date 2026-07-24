@@ -86,8 +86,11 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
 
     pref = model_preference or _MODEL_PREFERENCE
     keys_tried = set()
+    start_idx = _current_key_idx
+    attempt = 0
     while len(keys_tried) < len(_KEYS):
-        key_idx = _current_key_idx % len(_KEYS)
+        key_idx = (start_idx + attempt) % len(_KEYS)
+        attempt += 1
         if key_idx in keys_tried:
             break
         keys_tried.add(key_idx)
@@ -118,10 +121,10 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                 break
             except Exception as e:
                 err_str = str(e).lower()
-                if "deadline" in err_str or "timeout" in err_str or "exceeded" in err_str:
+                if "deadline" in err_str or "timeout" in err_str:
                     logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) using '{model_name}': {e} — trying next key")
                     break
-                elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str or "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str:
+                elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str or "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
                     logging.error(f"[GEMINI] Key #{key_idx + 1} quota/auth/block error — moving to next key. Error: {e}")
                     break
                 else:
@@ -375,6 +378,7 @@ Respond ONLY with a JSON object in this format (no markdown, no extra text):
 
         try:
             candidate = safe_load_json(final_json_raw)
+            if not isinstance(candidate, dict): continue
             required_keys = {"question", "options", "answer", "explanation"}
             if not required_keys.issubset(candidate):
                 continue

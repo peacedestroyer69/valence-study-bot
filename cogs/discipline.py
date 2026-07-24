@@ -586,9 +586,6 @@ class DisciplineCog(commands.Cog):
                 if loop_state.get("last_hourly_nag") == today_hour_str:
                     return
 
-                loop_state["last_hourly_nag"] = today_hour_str
-                await self.bot.save_data(data)
-
             logging.info(f"[DISCIPLINE] Hourly nag check at {hour}:00 IST")
 
             users = data.get("users", {})
@@ -670,6 +667,12 @@ class DisciplineCog(commands.Cog):
                     logging.warning(f"[DISCIPLINE] Cannot DM {uid_str} for hourly nag")
                 except Exception as e:
                     logging.error(f"[DISCIPLINE] Hourly nag error for {uid_str}: {e}")
+
+            async with self.bot.db_write_lock:
+                data = await self.bot.load_data()
+                data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})["last_hourly_nag"] = today_hour_str
+                await self.bot.save_data(data)
+
         except Exception as e:
             logging.error(f"[DISCIPLINE] Error in hourly_nag_check loop: {e}", exc_info=True)
 

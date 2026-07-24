@@ -360,10 +360,6 @@ class PuzzleCog(commands.Cog):
                 if not force and (self._today_puzzle_posted == today_str or loop_state.get("posted_date") == today_str):
                     return False
 
-                self._today_puzzle_posted = today_str
-                loop_state["posted_date"] = today_str
-                await self.bot.save_data(data)
-
             logging.info("[PUZZLE] Generating daily puzzle via brainstorm pipeline...")
             topic = PUZZLE_TOPICS[now_ist.weekday() % len(PUZZLE_TOPICS)]
             puzzle = await generate_puzzle(topic=topic, is_weekly=False)
@@ -431,6 +427,7 @@ class PuzzleCog(commands.Cog):
                     "message_id": alert_msg.id,
                 }
                 data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})["posted_date"] = today_str
+                self._today_puzzle_posted = today_str
                 await self.bot.save_data(data)
 
             logging.info(f"[PUZZLE] Posted daily puzzle for {today_str}")
@@ -484,7 +481,6 @@ class PuzzleCog(commands.Cog):
                     }
 
                 # Reset active state before generating (locks state)
-                active["week_start_date"] = expected_start_str
                 active["question"] = "Generating..."
                 active["options"] = {}
                 active["answer"] = ""
@@ -794,7 +790,7 @@ class PuzzleCog(commands.Cog):
 
                 try:
                     await member.send(kick_msg)
-                except discord.Forbidden:
+                except (discord.Forbidden, discord.HTTPException):
                     pass
 
                 try:
@@ -873,32 +869,35 @@ class PuzzleCog(commands.Cog):
                 streak = udata.get("current_streak_days", 0)
                 goal_hours = udata.get("daily_goal_seconds", DAILY_GOAL_SECONDS) / 3600
 
-                msg_text = await personalized_wakeup_msg(
-                    username=member.display_name,
-                    yesterday_hours=yesterday_hours,
-                    streak=streak,
-                    goal_hours=goal_hours,
-                )
-
-                embed = discord.Embed(
-                    title="⏰ 6 AM — New Day, New Grind",
-                    description=msg_text,
-                    color=0xFEE75C,
-                )
-                embed.add_field(
-                    name="🧩 Don't Forget",
-                    value="Today's puzzle drops at **8 AM**. Solve it before midnight or get kicked.",
-                    inline=False,
-                )
-                embed.set_footer(text=f"YPT Study Bot • {now_ist.strftime('%d %b %Y')} • Rise and Grind")
-
                 try:
-                    await member.send(embed=embed)
-                    await asyncio.sleep(0.5)
-                except discord.Forbidden:
-                    pass
+                    msg_text = await personalized_wakeup_msg(
+                        username=member.display_name,
+                        yesterday_hours=yesterday_hours,
+                        streak=streak,
+                        goal_hours=goal_hours,
+                    )
+
+                    embed = discord.Embed(
+                        title="⏰ 6 AM — New Day, New Grind",
+                        description=msg_text,
+                        color=0xFEE75C,
+                    )
+                    embed.add_field(
+                        name="🧩 Don't Forget",
+                        value="Today's puzzle drops at **8 AM**. Solve it before midnight or get kicked.",
+                        inline=False,
+                    )
+                    embed.set_footer(text=f"YPT Study Bot • {now_ist.strftime('%d %b %Y')} • Rise and Grind")
+
+                    try:
+                        await member.send(embed=embed)
+                        await asyncio.sleep(0.5)
+                    except discord.Forbidden:
+                        pass
+                    except Exception as e:
+                        logging.warning(f"[PUZZLE] 6AM DM failed for {member.display_name}: {e}")
                 except Exception as e:
-                    logging.warning(f"[PUZZLE] 6AM DM failed for {member.display_name}: {e}")
+                    print(f"Wakeup error for {member}: {e}")
 
             logging.info("[PUZZLE] 6 AM wake-up DMs sent")
 
@@ -1118,7 +1117,11 @@ class PuzzleCog(commands.Cog):
         uid = str(interaction.user.id)
         you_solved = uid in solved_users
 
-        channel = self.bot.get_channel(PUZZLE_CHANNEL_ID) or await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
+        try:
+            channel = self.bot.get_channel(PUZZLE_CHANNEL_ID) or await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
+        except (discord.NotFound, discord.HTTPException):
+            await interaction.followup.send("❌ Puzzle channel not found or API error.", ephemeral=True)
+            return
         guild = channel.guild if channel else interaction.guild
         total_members = len([m for m in guild.members if not m.bot]) if guild else "?"
 

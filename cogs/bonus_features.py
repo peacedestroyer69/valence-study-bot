@@ -125,6 +125,7 @@ class BonusFeaturesCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._touch_grass_sent_today = {}  # uid -> date to prevent spam
+        self._break_reminders_sent = set()
         self.weekly_duel_check.start()
         self.break_reminder_check.start()
         self.touch_grass_check.start()
@@ -570,6 +571,13 @@ class BonusFeaturesCog(commands.Cog):
             users = data.get("users", {})
             now_ts = int(time.time())
 
+            active_sessions = set()
+            for uid_str, udata in users.items():
+                start_ts = udata.get("session_start_timestamp")
+                if start_ts:
+                    active_sessions.add((uid_str, start_ts))
+            self._break_reminders_sent.intersection_update(active_sessions)
+
             for uid_str in list(users.keys()):
                 udata = users.get(uid_str, {})
                 start_ts = udata.get("session_start_timestamp")
@@ -579,10 +587,9 @@ class BonusFeaturesCog(commands.Cog):
                 elapsed = now_ts - start_ts
                 # Only fire at 2h mark or above, guarded by a state attribute
                 if elapsed >= 7200:
-                    flag = f"_break_reminder_{uid_str}_{start_ts}"
-                    if getattr(self, flag, False):
+                    if (uid_str, start_ts) in self._break_reminders_sent:
                         continue
-                    setattr(self, flag, True)
+                    self._break_reminders_sent.add((uid_str, start_ts))
 
                     for guild in self.bot.guilds:
                         member = guild.get_member(int(uid_str))
@@ -636,6 +643,8 @@ class BonusFeaturesCog(commands.Cog):
             data = await self.bot.load_data()
             users = data.get("users", {})
             today_str = get_ist_date().isoformat()
+
+            self._touch_grass_sent_today = {k: v for k, v in self._touch_grass_sent_today.items() if v == today_str}
 
             for uid_str in list(users.keys()):
                 udata = users.get(uid_str, {})

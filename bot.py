@@ -424,6 +424,13 @@ bot._message_buffer_lock = asyncio.Lock()
 bot.current_view_mode = "alltime"  # Leaderboard view state
 bot._http_session = None  # Shared aiohttp session (created in on_ready)
 
+original_close = bot.close
+async def custom_close():
+    if hasattr(bot, '_http_session') and bot._http_session and not bot._http_session.closed:
+        await bot._http_session.close()
+    await original_close()
+bot.close = custom_close
+
 async def get_or_fetch_channel(channel_id: int):
     """Retrieves a channel from cache, or fetches it via the API if not cached."""
     if not channel_id:
@@ -781,6 +788,7 @@ class LeaderboardView(discord.ui.View):
     async def _switch_mode(self, interaction: discord.Interaction, mode: str):
         try:
             self.current_mode = mode
+            bot.current_view_mode = mode
             data = await load_data()
             db_changed = False
             for uid, udata in data.get("users", {}).items():
@@ -1149,21 +1157,25 @@ async def flush_message_buffer_loop():
                 buffer_copy = bot._message_buffer.copy()
 
             async with bot.db_write_lock:
-                data = await load_data()
-                for uid_str, increment in buffer_copy.items():
-                    if uid_str not in data.setdefault("users", {}):
-                        username = uid_str
-                        for guild in bot.guilds:
-                            member = guild.get_member(int(uid_str))
-                            if member:
-                                username = member.display_name
-                                break
-                        data["users"][uid_str] = _default_user(username)
-                    udata = data["users"][uid_str]
-                    udata["total_messages"] = udata.get("total_messages", 0) + increment
-                    udata["messages_today"] = udata.get("messages_today", 0) + increment
-                    udata["messages_weekly"] = udata.get("messages_weekly", 0) + increment
-                await save_data(data)
+                if not hasattr(bot, "study_data"):
+                    bot.study_data = await load_data()
+                data = bot.study_data
+
+                if buffer_copy:
+                    for uid_str, increment in buffer_copy.items():
+                        if uid_str not in data.setdefault("users", {}):
+                            username = uid_str
+                            for guild in bot.guilds:
+                                member = guild.get_member(int(uid_str))
+                                if member:
+                                    username = member.display_name
+                                    break
+                            data["users"][uid_str] = _default_user(username)
+                        udata = data["users"][uid_str]
+                        udata["total_messages"] = udata.get("total_messages", 0) + increment
+                        udata["messages_today"] = udata.get("messages_today", 0) + increment
+                        udata["messages_weekly"] = udata.get("messages_weekly", 0) + increment
+                    await save_data(data)
 
             # Successfully saved! Now clear only the keys/counts we just flushed
             async with bot._message_buffer_lock:
@@ -2291,7 +2303,11 @@ async def on_ready():
 
     # Scan guilds for active voice sessions to prevent orphan wipe and track current states
     active_member_vc = {}
+    all_members = []
     for guild in bot.guilds:
+        for member in guild.members:
+            if not member.bot:
+                all_members.append(member)
         for vc in guild.voice_channels:
             for member in vc.members:
                 if not member.bot:
@@ -2302,10 +2318,8 @@ async def on_ready():
         data = await load_data()
 
         # Ensure all server members (excluding bots) are registered in the database
-        for guild in bot.guilds:
-            for member in guild.members:
-                if not member.bot:
-                    ensure_user(data, member)
+        for member in all_members:
+            ensure_user(data, member)
 
         # Ensure all currently active voice members are also registered
         for uid_str, vc in active_member_vc.items():

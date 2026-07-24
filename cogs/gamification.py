@@ -203,6 +203,9 @@ class GamificationCog(commands.Cog):
             wed_date = now_ist.date() - datetime.timedelta(days=days_to_wed)
             wed_9pm = datetime.datetime.combine(wed_date, datetime.time(21, 0), tzinfo=IST_TZ)
             
+            if now_ist.weekday() in (5, 6):
+                return
+            
             # 1. Spawning logic
             # The boss should spawn if now_ist is after Wednesday 9 PM IST
             # and we haven't spawned a boss for this Wednesday yet.
