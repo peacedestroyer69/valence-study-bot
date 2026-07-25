@@ -261,14 +261,23 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
     logging.warning("[GEMINI] ❌ All models and all keys exhausted — using static fallback")
     return fallback
 
-async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 15.0, max_output_tokens: int = 512) -> str:
-    """Calls Gemini API with fast strategy: cycle models within each key before rotating to next key."""
+async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 4.0, max_output_tokens: int = 512) -> str:
+    """Calls Gemini API with fast strategy: strict 6s overall speed limit, max 2 keys, 4s per-model timeout."""
     if not _GENAI_AVAILABLE or not _KEYS:
         return fallback
 
-    pref = _MODEL_PREFERENCE
+    import time
+    start_time = time.time()
+    max_global_seconds = 6.0  # Hard speed limit for motivation DMs
 
-    for attempt in range(len(_KEYS)):
+    pref = _MODEL_PREFERENCE
+    max_keys_to_try = min(len(_KEYS), 2)  # Max 2 keys for speed
+
+    for attempt in range(max_keys_to_try):
+        if time.time() - start_time >= max_global_seconds:
+            logging.warning("[GEMINI FAST] ⚡ 6s speed limit reached — instantly using pre-made fallback")
+            return fallback
+
         key_idx = (_current_key_idx + attempt) % len(_KEYS)
         key = _KEYS[key_idx]
         client = _get_client(key)
@@ -279,6 +288,10 @@ async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 15.0, m
         _record_key_attempt(key_num)
         
         for model_name in pref:
+            if time.time() - start_time >= max_global_seconds:
+                logging.warning("[GEMINI FAST] ⚡ 6s speed limit reached — instantly using pre-made fallback")
+                return fallback
+
             try:
                 loop = asyncio.get_running_loop()
                 config = types.GenerateContentConfig(
@@ -291,16 +304,15 @@ async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 15.0, m
                         contents=p,
                         config=cfg,
                     )),
-                    timeout=timeout + 2.0,
+                    timeout=timeout,
                 )
                 text = response.text.strip() if response.text else ""
                 if text:
                     _record_key_success(key_num, model_name)
-                    logging.info(f"[GEMINI FAST] ✅ Success using '{model_name}' on key #{key_num}")
+                    logging.info(f"[GEMINI FAST] ✅ Success using '{model_name}' on key #{key_num} in {round(time.time() - start_time, 2)}s")
                     return text
             except asyncio.TimeoutError:
                 _record_key_error(key_num, model_name, "timeout", "asyncio timeout exceeded")
-                logging.warning(f"[GEMINI FAST] Key #{key_num} timed out using '{model_name}' — trying next model")
                 continue
             except Exception as e:
                 err_str = str(e).lower()
@@ -322,10 +334,8 @@ async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 15.0, m
                 else:
                     _record_key_error(key_num, model_name, "other", str(e))
                     continue
-                    
-        await asyncio.sleep(1.0)
 
-    logging.warning("[GEMINI FAST] ❌ All keys and models exhausted — using static fallback")
+    logging.warning("[GEMINI FAST] ⚡ All attempts completed — using static fallback")
     return fallback
 
 # ============================================================
