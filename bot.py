@@ -3275,32 +3275,26 @@ async def ai_stats_command(interaction: discord.Interaction):
         rate = stats["success_rate"]
         rate_emoji = "🟢" if rate >= 90 else ("🟡" if rate >= 60 else "🔴")
 
+        # Build compact model cascade string
+        models_short = " → ".join(stats["model_preference"])
+
+        desc = (
+            f"{rate_emoji} **Success Rate: {rate}%**\n"
+            f"📊 Calls: `{stats['total_calls']}` | ✅ `{stats['total_success']}` | ❌ `{stats['total_errors']}`\n"
+            f"⚠️ 429s: `{stats['total_429']}` | 🔥 503s: `{stats['total_503']}`\n"
+            f"🔑 Keys: `{stats['total_keys']}` | Active: `Key #{stats['current_key_idx']}`\n"
+            f"─────────────────────\n"
+            f"**Model Order:** {models_short}"
+        )
+
         embed = discord.Embed(
-            title="🤖 Gemini AI Engine — Key Usage & Error Diagnostics",
-            description=(
-                f"**Overall Pipeline Health:** {rate_emoji} **{rate}% Success Rate**\n"
-                f"📊 **Total Calls:** `{stats['total_calls']}`  |  "
-                f"✅ **Successes:** `{stats['total_success']}`  |  "
-                f"❌ **Errors:** `{stats['total_errors']}`\n"
-                f"⚠️ **429 Rate Limits:** `{stats['total_429']}`  |  "
-                f"🔥 **503 Overloads:** `{stats['total_503']}`\n"
-                f"🔑 **Total Keys Configured:** `{stats['total_keys']}`  |  "
-                f"🎯 **Active Key Index:** `Key #{stats['current_key_idx']}`\n"
-                + "\u2500" * 30
-            ),
+            title="🤖 Gemini AI — Key Diagnostics",
+            description=desc,
             color=0x3498DB,
             timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
 
-        # Active Model Preference Cascade
-        models_cascade = " ➔ ".join([f"`{m}`" for m in stats["model_preference"]])
-        embed.add_field(
-            name="🔄 Active Model Fallback Order",
-            value=models_cascade,
-            inline=False
-        )
-
-        # Per Key Breakdown
+        # Per Key Breakdown — compact 
         for key_info in stats["key_stats"]:
             idx = key_info["key_idx"]
             masked = key_info["masked_key"]
@@ -3311,46 +3305,39 @@ async def ai_stats_command(interaction: discord.Interaction):
             o503 = key_info["overload_503_count"]
             tout = key_info["timeout_count"]
             a403 = key_info["auth_403_count"]
-            last_used = key_info["last_used_ts"] or "Never"
-            last_succ_mod = key_info["last_success_model"] or "None"
-            last_err = key_info["last_error_msg"] or "None"
-            last_err_ts = key_info["last_error_ts"] or ""
 
             # Determine key badge
             if a403 > 0:
-                badge = "🔴 Auth Error"
+                badge = "🔴"
             elif q429 > 0 and calls > 0 and (q429 / calls) > 0.5:
-                badge = "🟡 Quota Exceeded"
-            elif o503 > 0 and calls > 0 and (o503 / calls) > 0.5:
-                badge = "🟧 Server High Demand"
+                badge = "🟡"
             elif calls > 0 and succ > 0:
-                badge = "🟢 Operational"
+                badge = "🟢"
             elif calls > 0:
-                badge = "⚠️ Error Prone"
+                badge = "⚠️"
             else:
-                badge = "⚪ Idle (Ready)"
+                badge = "⚪"
 
-            # Models breakdown
-            m_used_str = ", ".join([f"{m}: {c}" for m, c in key_info["models_used"].items()]) or "None"
+            last_model = key_info["last_success_model"] or "—"
+            last_used = key_info["last_used_ts"] or "Never"
 
-            field_val = (
-                f"**Status:** {badge}\n"
-                f"• **Calls:** `{calls}` (✅ `{succ}` / ❌ `{errs}`)\n"
-                f"• **Errors:** 429 Quota: `{q429}` | 503 Overload: `{o503}` | Timeout: `{tout}` | 403 Auth: `{a403}`\n"
-                f"• **Models Used:** {m_used_str}\n"
-                f"• **Last Success Model:** `{last_succ_mod}`\n"
-                f"• **Last Used:** `{last_used}`"
-            )
-            if last_err != "None":
-                field_val += f"\n• **Last Error ({last_err_ts}):** `{last_err}`"
+            # Build compact field value
+            line1 = f"{badge} `{calls}` calls (✅`{succ}` ❌`{errs}`)"
+            line2 = f"429:`{q429}` 503:`{o503}` ⏱:`{tout}` 🔒:`{a403}`"
+            line3 = f"Last: `{last_model}` @ `{last_used}`"
+
+            # Add last error if exists (truncated to 50 chars)
+            last_err = key_info["last_error_msg"]
+            if last_err:
+                line3 += f"\n⚠️ `{last_err[:50]}`"
 
             embed.add_field(
-                name=f"🔑 Key #{idx} (`{masked}`)",
-                value=field_val,
-                inline=False
+                name=f"Key #{idx} ({masked})",
+                value=f"{line1}\n{line2}\n{line3}",
+                inline=True
             )
 
-        embed.set_footer(text="Use /ai_reset_stats to clear counters • Real-time Gemini Diagnostics")
+        embed.set_footer(text="/ai_reset_stats to clear • Live diagnostics")
 
         # Generate Matplotlib Chart Attachment in background thread
         try:
@@ -3361,7 +3348,7 @@ async def ai_stats_command(interaction: discord.Interaction):
             embed.set_image(url="attachment://ai_key_stats.png")
             await interaction.followup.send(embed=embed, file=chart_file)
         except Exception as chart_err:
-            logging.error(f"Error generating AI stats chart image: {chart_err}")
+            logging.error(f"Chart generation failed: {chart_err}")
             await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Error in /ai_stats: {e}", exc_info=True)
