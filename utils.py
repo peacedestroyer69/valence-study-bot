@@ -300,3 +300,89 @@ def generate_weekly_chart(username: str, days: list, hours: list) -> BytesIO:
     buf.seek(0)
     return buf
 
+
+def generate_ai_stats_chart(stats_data: dict) -> BytesIO:
+    """
+    Generates a modern Matplotlib double-panel dashboard chart showing:
+    - Left: Successes vs Errors per API Key
+    - Right: Specific Error Type Breakdown (429, 503, Timeout, 403, Other)
+    """
+    key_stats = stats_data.get("key_stats", [])
+    if not key_stats:
+        # Fallback empty chart
+        fig = Figure(figsize=(8, 4), dpi=150)
+        fig.patch.set_facecolor('#2B2D31')
+        buf = BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        return buf
+
+    labels = [f"Key #{k['key_idx']}\n({k['masked_key']})" for k in key_stats]
+    successes = [k["success_count"] for k in key_stats]
+    errors = [k["error_count"] for k in key_stats]
+    
+    q429 = [k["quota_429_count"] for k in key_stats]
+    o503 = [k["overload_503_count"] for k in key_stats]
+    timeouts = [k["timeout_count"] for k in key_stats]
+    a403 = [k["auth_403_count"] for k in key_stats]
+    other = [k["other_error_count"] for k in key_stats]
+
+    fig = Figure(figsize=(10, 4.5), dpi=150)
+    fig.patch.set_facecolor('#2B2D31')  # Discord gray
+    
+    ax1, ax2 = fig.subplots(1, 2)
+    ax1.set_facecolor('#1E1F22')
+    ax2.set_facecolor('#1E1F22')
+
+    import numpy as np
+    x = np.arange(len(labels))
+    width = 0.35
+
+    # Subplot 1: Success vs Error Calls
+    b1 = ax1.bar(x - width/2, successes, width, label='Success', color='#10B981', edgecolor='none')
+    b2 = ax1.bar(x + width/2, errors, width, label='Errors', color='#EF4444', edgecolor='none')
+    
+    ax1.set_title('API Calls: Success vs Error', color='white', fontsize=11, fontweight='bold', pad=10)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, color='#B5BAC1', fontsize=8)
+    ax1.tick_params(axis='y', colors='#B5BAC1', labelsize=8)
+    ax1.legend(facecolor='#2B2D31', edgecolor='#4F545C', labelcolor='white', fontsize=8)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    ax1.spines['left'].set_visible(False)
+    ax1.spines['bottom'].set_color('#4F545C')
+    ax1.yaxis.grid(True, color='#2F3136', linestyle='--', alpha=0.5)
+
+    # Subplot 2: Error Type Breakdown (Stacked Bar)
+    ax2.bar(x, q429, width=0.5, label='429 Quota', color='#F59E0B')
+    ax2.bar(x, o503, width=0.5, bottom=q429, label='503 Overload', color='#EC4899')
+    bottom_tout = np.array(q429) + np.array(o503)
+    ax2.bar(x, timeouts, width=0.5, bottom=bottom_tout, label='Timeout', color='#3B82F6')
+    bottom_403 = bottom_tout + np.array(timeouts)
+    ax2.bar(x, a403, width=0.5, bottom=bottom_403, label='403 Auth', color='#DC2626')
+    bottom_other = bottom_403 + np.array(a403)
+    ax2.bar(x, other, width=0.5, bottom=bottom_other, label='Other', color='#6B7280')
+
+    ax2.set_title('Error Breakdown by Type', color='white', fontsize=11, fontweight='bold', pad=10)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, color='#B5BAC1', fontsize=8)
+    ax2.tick_params(axis='y', colors='#B5BAC1', labelsize=8)
+    ax2.legend(facecolor='#2B2D31', edgecolor='#4F545C', labelcolor='white', fontsize=8)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['left'].set_visible(False)
+    ax2.spines['bottom'].set_color('#4F545C')
+    ax2.yaxis.grid(True, color='#2F3136', linestyle='--', alpha=0.5)
+
+    fig.suptitle(
+        f"Gemini AI Key Usage & Error Breakdown (Success Rate: {stats_data.get('success_rate', 100)}%)",
+        color='white', fontsize=12, fontweight='bold', y=0.98
+    )
+
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    return buf
+
+

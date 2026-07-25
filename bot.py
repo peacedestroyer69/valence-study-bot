@@ -3337,7 +3337,18 @@ async def ai_stats_command(interaction: discord.Interaction):
             )
 
         embed.set_footer(text="Use /ai_reset_stats to clear counters • Real-time Gemini Diagnostics")
-        await interaction.followup.send(embed=embed)
+
+        # Generate Matplotlib Chart Attachment in background thread
+        try:
+            from utils import generate_ai_stats_chart
+            loop = asyncio.get_running_loop()
+            chart_buf = await loop.run_in_executor(None, generate_ai_stats_chart, stats)
+            chart_file = discord.File(chart_buf, filename="ai_key_stats.png")
+            embed.set_image(url="attachment://ai_key_stats.png")
+            await interaction.followup.send(embed=embed, file=chart_file)
+        except Exception as chart_err:
+            logging.error(f"Error generating AI stats chart image: {chart_err}")
+            await interaction.followup.send(embed=embed)
     except Exception as e:
         logging.error(f"Error in /ai_stats: {e}", exc_info=True)
         await interaction.followup.send(f"❌ Error generating AI stats: {e}", ephemeral=True)
