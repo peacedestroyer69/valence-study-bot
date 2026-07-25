@@ -18,7 +18,7 @@ services:
       - key: FIREBASE_CREDENTIALS
         sync: false
       - key: PYTHON_VERSION
-        value: 3.10.12
+        value: 3.11.8
       - key: PUZZLE_CHANNEL_ID
         sync: false
       - key: GEMINI_API_KEY
