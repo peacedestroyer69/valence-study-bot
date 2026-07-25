@@ -342,11 +342,11 @@ class DisciplineCog(commands.Cog):
         users = data.get("users", {})
 
         general_channel = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
-        if not general_channel:
-            logging.error("[DISCIPLINE] Could not find General channel.")
+        guild = general_channel.guild if general_channel else (self.bot.guilds[0] if self.bot.guilds else None)
+        if not guild:
+            logging.error("[DISCIPLINE] Could not find guild for punishments.")
             return
-
-        guild = general_channel.guild
+        
         now_ist = get_ist_now()
         yesterday = (now_ist.date() - datetime.timedelta(days=1)).isoformat()
 
@@ -591,9 +591,10 @@ class DisciplineCog(commands.Cog):
             users = data.get("users", {})
 
             general_channel = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
-            if not general_channel:
+            guild = general_channel.guild if general_channel else (self.bot.guilds[0] if self.bot.guilds else None)
+            if not guild:
+                logging.warning("[DISCIPLINE] hourly nag: could not fetch guild")
                 return
-            guild = general_channel.guild
 
             today_str = now_ist.date().isoformat()
 
@@ -710,10 +711,10 @@ class DisciplineCog(commands.Cog):
             users = data.get("users", {})
 
             general_channel = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
-            if not general_channel:
-                logging.warning("[DISCIPLINE] gap reminder: could not fetch general channel")
+            guild = general_channel.guild if general_channel else (self.bot.guilds[0] if self.bot.guilds else None)
+            if not guild:
+                logging.warning("[DISCIPLINE] gap reminder: could not fetch guild")
                 return
-            guild = general_channel.guild
 
             time_now_str = now_ist.strftime("%H:%M")
             today_str = now_ist.date().isoformat()

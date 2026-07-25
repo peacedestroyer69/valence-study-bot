@@ -467,28 +467,8 @@ class PuzzleCog(commands.Cog):
 
                 if not force and active.get("week_start_date") == expected_start_str:
                     return False
-
-                # Archive existing active puzzle to history
-                old_start = active.get("week_start_date")
-                if old_start:
-                    history = weekly_data.setdefault("history", {})
-                    history[old_start] = {
-                        "question": active.get("question"),
-                        "options": active.get("options"),
-                        "answer": active.get("answer"),
-                        "explanation": active.get("explanation"),
-                        "solved_users": active.get("solved_users", []),
-                    }
-
-                # Reset active state before generating (locks state)
-                active["question"] = "Generating..."
-                active["options"] = {}
-                active["answer"] = ""
-                active["explanation"] = ""
-                active["solvers"] = {}
-                active["attempts"] = {}
-                active["posted_at"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                await self.bot.save_data(data)
+                if active.get("question") == "Generating...":
+                    pass # We will just overwrite it or let it generate
 
             logging.info(f"[PUZZLE] Generating weekly mega puzzle for week starting {expected_start_str}...")
             puzzle = await generate_puzzle(topic="mixed", is_weekly=True)
@@ -496,6 +476,8 @@ class PuzzleCog(commands.Cog):
             channel = self.bot.get_channel(PUZZLE_CHANNEL_ID)
             if channel is None:
                 channel = await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
+            if not channel:
+                raise ValueError("Puzzle channel not found")
 
             opts = puzzle["options"]
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
@@ -528,6 +510,18 @@ class PuzzleCog(commands.Cog):
                 data = await self.bot.load_data()
                 weekly_data = data.setdefault("meta", {}).setdefault("weekly_puzzle", {})
                 active = weekly_data.setdefault("active", {})
+
+                # Archive existing active puzzle to history
+                old_start = active.get("week_start_date")
+                if old_start and old_start != expected_start_str and active.get("question") != "Generating...":
+                    history = weekly_data.setdefault("history", {})
+                    history[old_start] = {
+                        "question": active.get("question"),
+                        "options": active.get("options"),
+                        "answer": active.get("answer"),
+                        "explanation": active.get("explanation"),
+                        "solved_users": active.get("solvers", {}),
+                    }
 
                 active["question"] = puzzle["question"]
                 active["options"] = puzzle["options"]

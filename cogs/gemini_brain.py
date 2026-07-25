@@ -44,9 +44,13 @@ for k in _ALL_KEYS:
 
 _MODEL_PREFERENCE = [
     "gemini-3.6-flash",
+    "gemini-3.6-flash-lite",
     "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite"
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite"
 ]
 
 _current_key_idx = 0
@@ -207,12 +211,13 @@ _FALLBACK_WEEKLY_PUZZLES = [
 
 def _clean_json_response(raw: str) -> str:
     raw = raw.strip()
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        if len(lines) > 1 and lines[0].strip().startswith("```"):
-            raw = "\n".join(lines[1:])
+    if raw.startswith("```json"):
+        raw = raw[7:]
+    elif raw.startswith("```"):
+        raw = raw[3:]
     if raw.endswith("```"):
-        raw = raw.rsplit("```", 1)[0]
+        raw = raw[:-3]
+    
     raw = raw.strip()
 
     first_brace = raw.find("{")
@@ -249,7 +254,10 @@ def safe_load_json(raw: str) -> dict:
     except json.JSONDecodeError:
         import re
         cleaned_no_trailing = re.sub(r',(?=\s*?[}\]])', '', cleaned)
-        return json.loads(cleaned_no_trailing)
+        try:
+            return json.loads(cleaned_no_trailing)
+        except json.JSONDecodeError:
+            return {}
 
 def clean_message_text(text: str) -> str:
     if not text:
@@ -274,11 +282,11 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
     """
     if is_weekly:
         challenge_desc = "an extremely difficult, deep conceptual weekly mega puzzle (covering mathematics, advanced science, logic, or programming). It must require multi-step logical deduction or deep conceptual understanding, and have no time limit to solve. It should be challenging even for very smart students. You have no token limit. Explain the problem, choices, and solution in extreme depth with full mathematical/logical rigor."
-        pref = ["gemini-3.5-flash", "gemini-2.5-flash"]
+        pref = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
         tokens = 3072
     elif topic == "logic":
         challenge_desc = "a tricky logic puzzle or lateral thinking brain teaser — no equations needed. Keep the question, options, and explanation extremely brief and concise (under 80 words total). Do not write long introductions. Save tokens."
-        pref = ["gemini-2.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
+        pref = ["gemini-3.6-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
         tokens = 512
     else:
         topic_map = {
@@ -287,7 +295,7 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
         }
         topic_desc = topic_map.get(topic, topic_map["mixed"])
         challenge_desc = f"{topic_desc} suitable for Indian JEE aspirants (age 16-18), solvable in under 2 minutes. Keep the explanation reasonable and precise."
-        pref = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        pref = ["gemini-3.6-flash", "gemini-3.6-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
         tokens = 1536
 
     for attempt in range(3):

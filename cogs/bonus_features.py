@@ -124,7 +124,7 @@ class BonusFeaturesCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._touch_grass_sent_today = {}  # uid -> date to prevent spam
+        self._touch_grass_sent_today = set()  # set of (uid, date) to prevent spam
         self._break_reminders_sent = set()
         self.weekly_duel_check.start()
         self.break_reminder_check.start()
@@ -644,7 +644,8 @@ class BonusFeaturesCog(commands.Cog):
             users = data.get("users", {})
             today_str = get_ist_date().isoformat()
 
-            self._touch_grass_sent_today = {k: v for k, v in self._touch_grass_sent_today.items() if v == today_str}
+            # prune old dates
+            self._touch_grass_sent_today = {(uid, d) for uid, d in self._touch_grass_sent_today if d == today_str}
 
             for uid_str in list(users.keys()):
                 udata = users.get(uid_str, {})
@@ -655,10 +656,9 @@ class BonusFeaturesCog(commands.Cog):
                     continue
 
                 # Only send once per day per user
-                last_sent = self._touch_grass_sent_today.get(uid_str)
-                if last_sent == today_str:
+                if (uid_str, today_str) in self._touch_grass_sent_today:
                     continue
-                self._touch_grass_sent_today[uid_str] = today_str
+                self._touch_grass_sent_today.add((uid_str, today_str))
 
                 for guild in self.bot.guilds:
                     member = guild.get_member(int(uid_str))

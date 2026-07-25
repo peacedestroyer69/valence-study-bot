@@ -726,7 +726,12 @@ async def update_leaderboard_embed(mode: str = "alltime"):
             except (discord.NotFound, discord.HTTPException):
                 logging.warning("Previous leaderboard message not found. Sending new one.")
 
-        msg = await channel.send(embed=embed, view=view)
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except (discord.NotFound, discord.Forbidden) as e:
+            logging.error(f"Cannot write to leaderboard channel (NotFound/Forbidden): {e}")
+            return
+            
         async with bot.db_write_lock:
             data = await load_data()
             data["meta"]["leaderboard_message_id"] = msg.id
@@ -1751,11 +1756,10 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
             bot.dispatch("study_session_ended", member, _study_secs)
             await update_leaderboard_embed(bot.current_view_mode)
 
-        if channel.id == POMODORO_CHANNEL_ID:
-            # Keep status updates handled by the background status loop for Group Pomodoro
-            if channel.id != POMODORO_CHANNEL_ID:
-                await update_voice_channel_status(channel, None)
-            await update_bot_presence(data)
+        # Keep status updates handled by the background status loop for Group Pomodoro
+        if channel.id != POMODORO_CHANNEL_ID:
+            await update_voice_channel_status(channel, None)
+        await update_bot_presence(data)
 
         if _do_study_log:
             log_info("STUDY END", f"{format_time_precise(_session_seconds)} in #{channel.name}", member)

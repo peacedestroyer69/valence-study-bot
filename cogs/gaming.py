@@ -304,20 +304,20 @@ class GamingCog(commands.Cog):
     @tasks.loop(minutes=5)
     async def chess_poll_loop(self):
         """Polls Lichess every 5 minutes for head-to-head matches between all linked users."""
-        data = await self.bot.load_data()
-        users = data.get("users", {})
-
-        # Build a mapping of lichess_username (lowercase) -> discord_user_id
-        lichess_map = {}
-        for uid_str, udata in users.items():
-            lichess_username = udata.get("chess_accounts", {}).get("lichess")
-            if lichess_username:
-                lichess_map[lichess_username.lower()] = uid_str
-
-        if len(lichess_map) < 2:
-            return
-
+        await self.bot.wait_until_ready()
         try:
+            data = await self.bot.load_data()
+            users = data.get("users", {})
+
+            # Build a mapping of lichess_username (lowercase) -> discord_user_id
+            lichess_map = {}
+            for uid_str, udata in users.items():
+                lichess_username = udata.get("chess_accounts", {}).get("lichess")
+                if lichess_username:
+                    lichess_map[lichess_username.lower()] = uid_str
+
+            if len(lichess_map) < 2:
+                return
             session = self.get_session()
             headers = {"Accept": "application/x-ndjson"}
             # Poll Lichess for each user's recent games
