@@ -3246,6 +3246,116 @@ async def pace_command(interaction: discord.Interaction):
         await interaction.followup.send('❌ Something went wrong.', ephemeral=True)
 
 
+# ============================================================
+# SECTION 12e: AI PIPELINE & GEMINI KEY DIAGNOSTIC COMMANDS
+# ============================================================
+
+@bot.tree.command(name='ai_stats', description='Detailed diagnostic breakdown of Gemini API keys, usage rates, and error logs')
+async def ai_stats_command(interaction: discord.Interaction):
+    """Displays in-depth diagnostic data for all configured Gemini API keys."""
+    await interaction.response.defer(ephemeral=False)
+    try:
+        from cogs.gemini_brain import get_gemini_stats_data
+        stats = get_gemini_stats_data()
+
+        rate = stats["success_rate"]
+        rate_emoji = "🟢" if rate >= 90 else ("🟡" if rate >= 60 else "🔴")
+
+        embed = discord.Embed(
+            title="🤖 Gemini AI Engine — Key Usage & Error Diagnostics",
+            description=(
+                f"**Overall Pipeline Health:** {rate_emoji} **{rate}% Success Rate**\n"
+                f"📊 **Total Calls:** `{stats['total_calls']}`  |  "
+                f"✅ **Successes:** `{stats['total_success']}`  |  "
+                f"❌ **Errors:** `{stats['total_errors']}`\n"
+                f"⚠️ **429 Rate Limits:** `{stats['total_429']}`  |  "
+                f"🔥 **503 Overloads:** `{stats['total_503']}`\n"
+                f"🔑 **Total Keys Configured:** `{stats['total_keys']}`  |  "
+                f"🎯 **Active Key Index:** `Key #{stats['current_key_idx']}`\n"
+                f"\u2500" * 30
+            ),
+            color=0x3498DB,
+            timestamp=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+        # Active Model Preference Cascade
+        models_cascade = " ➔ ".join([f"`{m}`" for m in stats["model_preference"]])
+        embed.add_field(
+            name="🔄 Active Model Fallback Order",
+            value=models_cascade,
+            inline=False
+        )
+
+        # Per Key Breakdown
+        for key_info in stats["key_stats"]:
+            idx = key_info["key_idx"]
+            masked = key_info["masked_key"]
+            calls = key_info["total_calls"]
+            succ = key_info["success_count"]
+            errs = key_info["error_count"]
+            q429 = key_info["quota_429_count"]
+            o503 = key_info["overload_503_count"]
+            tout = key_info["timeout_count"]
+            a403 = key_info["auth_403_count"]
+            last_used = key_info["last_used_ts"] or "Never"
+            last_succ_mod = key_info["last_success_model"] or "None"
+            last_err = key_info["last_error_msg"] or "None"
+            last_err_ts = key_info["last_error_ts"] or ""
+
+            # Determine key badge
+            if a403 > 0:
+                badge = "🔴 Auth Error"
+            elif q429 > 0 and calls > 0 and (q429 / calls) > 0.5:
+                badge = "🟡 Quota Exceeded"
+            elif o503 > 0 and calls > 0 and (o503 / calls) > 0.5:
+                badge = "🟧 Server High Demand"
+            elif calls > 0 and succ > 0:
+                badge = "🟢 Operational"
+            elif calls > 0:
+                badge = "⚠️ Error Prone"
+            else:
+                badge = "⚪ Idle (Ready)"
+
+            # Models breakdown
+            m_used_str = ", ".join([f"{m}: {c}" for m, c in key_info["models_used"].items()]) or "None"
+
+            field_val = (
+                f"**Status:** {badge}\n"
+                f"• **Calls:** `{calls}` (✅ `{succ}` / ❌ `{errs}`)\n"
+                f"• **Errors:** 429 Quota: `{q429}` | 503 Overload: `{o503}` | Timeout: `{tout}` | 403 Auth: `{a403}`\n"
+                f"• **Models Used:** {m_used_str}\n"
+                f"• **Last Success Model:** `{last_succ_mod}`\n"
+                f"• **Last Used:** `{last_used}`"
+            )
+            if last_err != "None":
+                field_val += f"\n• **Last Error ({last_err_ts}):** `{last_err}`"
+
+            embed.add_field(
+                name=f"🔑 Key #{idx} (`{masked}`)",
+                value=field_val,
+                inline=False
+            )
+
+        embed.set_footer(text="Use /ai_reset_stats to clear counters • Real-time Gemini Diagnostics")
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logging.error(f"Error in /ai_stats: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error generating AI stats: {e}", ephemeral=True)
+
+
+@bot.tree.command(name='ai_reset_stats', description='Reset all Gemini API key usage and error tracking counters')
+async def ai_reset_stats_command(interaction: discord.Interaction):
+    """Resets the Gemini API key tracking counters."""
+    await interaction.response.defer(ephemeral=True)
+    try:
+        from cogs.gemini_brain import reset_gemini_stats_data
+        reset_gemini_stats_data()
+        await interaction.followup.send("✅ **Gemini key statistics and error counters have been reset!**", ephemeral=True)
+    except Exception as e:
+        logging.error(f"Error resetting AI stats: {e}")
+        await interaction.followup.send(f"❌ Error resetting AI stats: {e}", ephemeral=True)
+
+
 @bot.tree.command(name='checkin', description='Check in with your study plan for today')
 @app_commands.describe(plan='What are you planning to study today?')
 async def checkin_command(interaction: discord.Interaction, plan: str):

@@ -58,6 +58,108 @@ _cached_clients: dict[str, object] = {}   # key -> genai.Client instance
 _rotation_lock = asyncio.Lock()
 _init_lock = asyncio.Lock()  # Serialize client init
 
+# --- GEMINI KEY DETAILED METRICS TRACKER ---
+_KEY_STATS: dict[int, dict] = {}
+
+def _init_key_stats():
+    """Initializes tracking metrics for all configured Gemini API keys."""
+    global _KEY_STATS
+    _KEY_STATS = {}
+    for idx, k in enumerate(_KEYS):
+        key_num = idx + 1
+        masked = f"...{k[-4:]}" if len(k) >= 4 else "...????"
+        _KEY_STATS[key_num] = {
+            "key_idx": key_num,
+            "masked_key": masked,
+            "total_calls": 0,
+            "success_count": 0,
+            "error_count": 0,
+            "quota_429_count": 0,
+            "overload_503_count": 0,
+            "timeout_count": 0,
+            "not_found_404_count": 0,
+            "auth_403_count": 0,
+            "other_error_count": 0,
+            "last_used_ts": None,
+            "last_success_ts": None,
+            "last_success_model": None,
+            "last_error_ts": None,
+            "last_error_msg": None,
+            "last_error_model": None,
+            "models_used": {},
+        }
+
+_init_key_stats()
+
+def _record_key_attempt(key_num: int):
+    import datetime
+    from utils import IST_TZ
+    if key_num in _KEY_STATS:
+        _KEY_STATS[key_num]["total_calls"] += 1
+        _KEY_STATS[key_num]["last_used_ts"] = datetime.datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
+
+def _record_key_success(key_num: int, model_name: str):
+    import datetime
+    from utils import IST_TZ
+    if key_num in _KEY_STATS:
+        s = _KEY_STATS[key_num]
+        s["success_count"] += 1
+        ts_str = datetime.datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
+        s["last_success_ts"] = ts_str
+        s["last_success_model"] = model_name
+        s["models_used"][model_name] = s["models_used"].get(model_name, 0) + 1
+
+def _record_key_error(key_num: int, model_name: str, err_type: str, err_msg: str):
+    import datetime
+    from utils import IST_TZ
+    if key_num in _KEY_STATS:
+        s = _KEY_STATS[key_num]
+        s["error_count"] += 1
+        ts_str = datetime.datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S IST")
+        s["last_error_ts"] = ts_str
+        s["last_error_msg"] = err_msg[:120]  # truncate long error strings
+        s["last_error_model"] = model_name
+
+        if err_type == "429":
+            s["quota_429_count"] += 1
+        elif err_type == "503":
+            s["overload_503_count"] += 1
+        elif err_type == "timeout":
+            s["timeout_count"] += 1
+        elif err_type == "404":
+            s["not_found_404_count"] += 1
+        elif err_type == "403":
+            s["auth_403_count"] += 1
+        else:
+            s["other_error_count"] += 1
+
+def get_gemini_stats_data() -> dict:
+    """Returns detailed statistics about Gemini API key usage and errors."""
+    total_calls = sum(s["total_calls"] for s in _KEY_STATS.values())
+    total_success = sum(s["success_count"] for s in _KEY_STATS.values())
+    total_errors = sum(s["error_count"] for s in _KEY_STATS.values())
+    total_429 = sum(s["quota_429_count"] for s in _KEY_STATS.values())
+    total_503 = sum(s["overload_503_count"] for s in _KEY_STATS.values())
+    
+    success_rate = (total_success / total_calls * 100) if total_calls > 0 else 100.0
+
+    return {
+        "total_keys": len(_KEYS),
+        "current_key_idx": _current_key_idx + 1,
+        "total_calls": total_calls,
+        "total_success": total_success,
+        "total_errors": total_errors,
+        "total_429": total_429,
+        "total_503": total_503,
+        "success_rate": round(success_rate, 1),
+        "model_preference": _MODEL_PREFERENCE,
+        "key_stats": list(_KEY_STATS.values()),
+    }
+
+def reset_gemini_stats_data():
+    """Resets all tracked key statistics counters."""
+    _init_key_stats()
+
 def _get_client(key: str):
     """Returns the genai.Client for a given API key, creating if needed."""
     if key not in _cached_clients:
@@ -99,6 +201,8 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
             if client is None:
                 continue
 
+            key_num = key_idx + 1
+            _record_key_attempt(key_num)
             try:
                 loop = asyncio.get_running_loop()
                 config = types.GenerateContentConfig(
@@ -115,32 +219,40 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
                 )
                 text = response.text.strip() if response.text else ""
                 if text:
-                    logging.info(f"[GEMINI] ✅ Success using '{model_name}' on key #{key_idx + 1}")
+                    _record_key_success(key_num, model_name)
+                    logging.info(f"[GEMINI] ✅ Success using '{model_name}' on key #{key_num}")
                     return text
             except asyncio.TimeoutError:
-                logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out using '{model_name}' — trying next key")
+                _record_key_error(key_num, model_name, "timeout", "asyncio timeout exceeded")
+                logging.warning(f"[GEMINI] Key #{key_num} timed out using '{model_name}' — trying next key")
                 continue
             except Exception as e:
                 err_str = str(e).lower()
                 if "not found" in err_str or "404" in err_str or "not_found" in err_str:
+                    _record_key_error(key_num, model_name, "404", str(e))
                     logging.warning(f"[GEMINI] Model '{model_name}' does not exist (404) — skipping to next model")
                     model_skip = True
                     break
                 elif "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
-                    logging.warning(f"[GEMINI] '{model_name}' is overloaded (503) on key #{key_idx + 1} — trying next key")
-                    continue  # try next key, but if all fail we'll fall through to next model
+                    _record_key_error(key_num, model_name, "503", str(e))
+                    logging.warning(f"[GEMINI] '{model_name}' is overloaded (503) on key #{key_num} — trying next key")
+                    continue
                 elif "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str or "exhausted" in err_str or "exceeded" in err_str:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} quota exceeded for '{model_name}' — trying next key")
+                    _record_key_error(key_num, model_name, "429", str(e))
+                    logging.warning(f"[GEMINI] Key #{key_num} quota exceeded for '{model_name}' — trying next key")
                     await asyncio.sleep(1.0)
                     continue
                 elif "deadline" in err_str or "timeout" in err_str:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} timed out (API) for '{model_name}' — trying next key")
+                    _record_key_error(key_num, model_name, "timeout", str(e))
+                    logging.warning(f"[GEMINI] Key #{key_num} timed out (API) for '{model_name}' — trying next key")
                     continue
                 elif "api_key" in err_str or "invalid" in err_str or "403" in err_str or "blocked" in err_str:
-                    logging.error(f"[GEMINI] Key #{key_idx + 1} auth error — skipping key. Error: {e}")
+                    _record_key_error(key_num, model_name, "403", str(e))
+                    logging.error(f"[GEMINI] Key #{key_num} auth error — skipping key. Error: {e}")
                     continue
                 else:
-                    logging.warning(f"[GEMINI] Key #{key_idx + 1} error with '{model_name}': {e} — trying next key")
+                    _record_key_error(key_num, model_name, "other", str(e))
+                    logging.warning(f"[GEMINI] Key #{key_num} error with '{model_name}': {e} — trying next key")
                     continue
 
         if not model_skip:
