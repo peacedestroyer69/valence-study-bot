@@ -2397,12 +2397,25 @@ async def on_ready():
     bot.add_view(LeaderboardView("alltime"))
 
     # Restore/create leaderboard embed
-    await update_leaderboard_embed("alltime")
+    try:
+        await update_leaderboard_embed("alltime")
+    except Exception as lb_err:
+        logging.error(f"Error restoring leaderboard embed: {lb_err}")
 
     try:
         logging.info("Syncing application commands...")
-        synced = await bot.tree.sync()
-        logging.info(f"Successfully synced {len(synced)} application commands globally.")
+        synced_global = await bot.tree.sync()
+        logging.info(f"Successfully synced {len(synced_global)} application commands globally.")
+
+        # Also sync to each connected guild for INSTANT command updates in Discord UI
+        for guild in bot.guilds:
+            try:
+                bot.tree.copy_global_to(guild=guild)
+                synced_guild = await bot.tree.sync(guild=guild)
+                logging.info(f"Successfully synced {len(synced_guild)} commands to guild '{guild.name}' ({guild.id})")
+            except Exception as g_err:
+                logging.warning(f"Could not sync commands to guild {guild.id}: {g_err}")
+
     except Exception as sync_err:
         logging.error(f"Failed to sync application commands: {sync_err}")
 
