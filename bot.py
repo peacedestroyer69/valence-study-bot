@@ -1253,9 +1253,11 @@ async def presence_rotation_loop():
         discord.Activity(type=discord.ActivityType.listening, name="study lofi ☕"),
     ]
     idx = 0
-    while True:
+    while not bot.is_closed():
         try:
             await asyncio.sleep(60)
+            if bot.is_closed():
+                break
             data = await load_data()
             users = data.get("users", {})
             any_active = any(
@@ -1267,8 +1269,11 @@ async def presence_rotation_loop():
             else:
                 await bot.change_presence(activity=statuses[idx % len(statuses)])
                 idx += 1
+        except (discord.ConnectionClosed, asyncio.CancelledError):
+            break
         except Exception as e:
-            logging.error(f"Presence rotation error: {e}")
+            if not bot.is_closed():
+                logging.error(f"Presence rotation error: {e}")
             await asyncio.sleep(60)
 
 
@@ -3495,13 +3500,15 @@ async def shutdown(sig=None):
 
     # 3. Clean up keep-alive runner
     global _keepalive_runner
-    if _keepalive_runner is not None and hasattr(_keepalive_runner, 'cleanup'):
+    if _keepalive_runner is not None:
         try:
+            if hasattr(_keepalive_runner, 'server') and _keepalive_runner.server is not None:
+                await _keepalive_runner.pre_shutdown()
             await _keepalive_runner.cleanup()
             _keepalive_runner = None
             logging.info("Keep-alive runner cleaned up successfully.")
         except Exception as e:
-            logging.error(f"Error cleaning up keep-alive runner: {e}")
+            logging.debug(f"Keep-alive cleanup completed: {e}")
 
     # 3. Save database
     try:
