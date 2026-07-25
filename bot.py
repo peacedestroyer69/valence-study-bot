@@ -2404,17 +2404,18 @@ async def on_ready():
 
     try:
         logging.info("Syncing application commands...")
-        synced_global = await bot.tree.sync()
-        logging.info(f"Successfully synced {len(synced_global)} application commands globally.")
 
-        # Also sync to each connected guild for INSTANT command updates in Discord UI
+        # Clear any leftover guild-level command duplicates, then sync globally only
         for guild in bot.guilds:
             try:
-                bot.tree.copy_global_to(guild=guild)
-                synced_guild = await bot.tree.sync(guild=guild)
-                logging.info(f"Successfully synced {len(synced_guild)} commands to guild '{guild.name}' ({guild.id})")
+                bot.tree.clear_commands(guild=guild)
+                await bot.tree.sync(guild=guild)
+                logging.info(f"Cleared guild-level command duplicates for '{guild.name}' ({guild.id})")
             except Exception as g_err:
-                logging.warning(f"Could not sync commands to guild {guild.id}: {g_err}")
+                logging.warning(f"Could not clear guild commands for {guild.id}: {g_err}")
+
+        synced_global = await bot.tree.sync()
+        logging.info(f"Successfully synced {len(synced_global)} application commands globally.")
 
     except Exception as sync_err:
         logging.error(f"Failed to sync application commands: {sync_err}")
@@ -3285,7 +3286,7 @@ async def ai_stats_command(interaction: discord.Interaction):
                 f"🔥 **503 Overloads:** `{stats['total_503']}`\n"
                 f"🔑 **Total Keys Configured:** `{stats['total_keys']}`  |  "
                 f"🎯 **Active Key Index:** `Key #{stats['current_key_idx']}`\n"
-                f"\u2500" * 30
+                + "\u2500" * 30
             ),
             color=0x3498DB,
             timestamp=datetime.datetime.now(datetime.timezone.utc),
