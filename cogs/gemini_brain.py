@@ -261,21 +261,20 @@ async def _call_gemini(prompt: str, fallback: str, timeout: float = 18.0, model_
     logging.warning("[GEMINI] ❌ All models and all keys exhausted — using static fallback")
     return fallback
 
-async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 4.0, max_output_tokens: int = 512) -> str:
-    """Calls Gemini API with fast strategy: strict 6s overall speed limit, max 2 keys, 4s per-model timeout."""
+async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 7.0, max_output_tokens: int = 512) -> str:
+    """Calls Gemini API with fast strategy: 15s overall speed limit, tries all keys, 7s per-model timeout."""
     if not _GENAI_AVAILABLE or not _KEYS:
         return fallback
 
     import time
     start_time = time.time()
-    max_global_seconds = 6.0  # Hard speed limit for motivation DMs
+    max_global_seconds = 15.0  # Generous 15s speed limit for motivation DMs
 
     pref = _MODEL_PREFERENCE
-    max_keys_to_try = min(len(_KEYS), 2)  # Max 2 keys for speed
 
-    for attempt in range(max_keys_to_try):
+    for attempt in range(len(_KEYS)):
         if time.time() - start_time >= max_global_seconds:
-            logging.warning("[GEMINI FAST] ⚡ 6s speed limit reached — instantly using pre-made fallback")
+            logging.warning("[GEMINI FAST] ⚡ 15s speed limit reached — using pre-made fallback")
             return fallback
 
         key_idx = (_current_key_idx + attempt) % len(_KEYS)
@@ -289,7 +288,7 @@ async def _call_gemini_fast(prompt: str, fallback: str, timeout: float = 4.0, ma
         
         for model_name in pref:
             if time.time() - start_time >= max_global_seconds:
-                logging.warning("[GEMINI FAST] ⚡ 6s speed limit reached — instantly using pre-made fallback")
+                logging.warning("[GEMINI FAST] ⚡ 15s speed limit reached — using pre-made fallback")
                 return fallback
 
             try:
