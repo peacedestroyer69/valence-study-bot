@@ -187,6 +187,8 @@ class DisciplineCog(commands.Cog):
         self._congrats_sent: dict = {}
         # Per-user hourly nag tracker to prevent memory leak (key tuple -> bool)
         self._nags_sent: dict = {}
+        # Mutual exclusion: tracks which users got hourly_nag DMs per hour ("date_hour" -> set(uid_str))
+        self._hourly_nag_sent_users: dict = {}
 
         self.daily_discipline_check.start()
         self.hourly_nag_check.start()
@@ -660,6 +662,8 @@ class DisciplineCog(commands.Cog):
                         )
                     )
                     await member.send(embed=embed)
+                    # Record this user as already nagged this hour (mutual exclusion with study_gap_reminder_loop)
+                    self._hourly_nag_sent_users.setdefault(today_hour_str, set()).add(uid_str)
                     logging.info(
                         f"[DISCIPLINE] Sent {hour}:00 nag to {my_data.get('username', uid_str)} "
                         f"(state={state})"
@@ -728,6 +732,11 @@ class DisciplineCog(commands.Cog):
 
                     # Skip if currently studying — never nag an active studier
                     if state == STATE_CURRENTLY_STUDYING:
+                        continue
+
+                    # MUTUAL EXCLUSION: Skip if hourly_nag_check already DM'd this user this hour
+                    if uid_str in self._hourly_nag_sent_users.get(today_hour_str, set()):
+                        logging.info(f"[DISCIPLINE] Skipping gap reminder for {uid_str} — already nagged by hourly_nag_check this hour")
                         continue
 
                     # Resolve member early (needed for all branches)
