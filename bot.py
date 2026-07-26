@@ -1630,6 +1630,18 @@ async def _handle_leave(member: discord.Member, channel: discord.VoiceChannel):
         if ch_type == "untracked":
             return
 
+        # Auto-cancel personal Pomodoro if user leaves study voice channel
+        if member.id in active_pomodoros:
+            pomo = active_pomodoros.pop(member.id, None)
+            if pomo:
+                task = pomo.get("task")
+                if task:
+                    task.cancel()
+                try:
+                    await member.send("🛑 **Pomodoro Auto-Stopped**: You left the study voice channel, so your personal Pomodoro timer has been stopped.")
+                except Exception:
+                    pass
+
         # Track variables for post-lock work
         _do_pomo_log = False
         _do_study_log = False
@@ -2021,9 +2033,33 @@ async def individual_pomodoro_loop(user_id: int):
             except Exception:
                 pass
 
-            # Wait for study period
-            await asyncio.sleep(study_secs)
-            if user_id not in active_pomodoros:
+            # Wait for study period with periodic voice check (every 15s)
+            elapsed = 0
+            user_disconnected = False
+            while elapsed < study_secs:
+                step = min(15, study_secs - elapsed)
+                await asyncio.sleep(step)
+                elapsed += step
+                if user_id not in active_pomodoros:
+                    user_disconnected = True
+                    break
+                # Check if user is still in a study voice channel
+                member = None
+                for g in bot.guilds:
+                    member = g.get_member(user_id)
+                    if member:
+                        break
+                if not (member and member.voice and member.voice.channel and member.voice.channel.id in STUDY_CHANNELS):
+                    logging.info(f"[POMODORO] User {user_id} disconnected from study voice — auto-stopping personal Pomodoro")
+                    try:
+                        await member.send("🛑 **Pomodoro Auto-Stopped**: You disconnected from the study voice channel, so your personal Pomodoro timer has been stopped.")
+                    except Exception:
+                        pass
+                    active_pomodoros.pop(user_id, None)
+                    user_disconnected = True
+                    break
+
+            if user_disconnected or user_id not in active_pomodoros:
                 break
 
             pomo["current_phase"] = "break"
