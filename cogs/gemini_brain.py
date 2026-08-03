@@ -1115,7 +1115,8 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
         draft_prompt = f"""You are the Brainstormer. Generate a draft of {challenge_desc}.
 It must have 4 options (A, B, C, D) and only one correct option.
 Output the puzzle draft including the question, the options, the correct answer, and your initial explanation.
-LATEX & MATH FORMATTING: Standard LaTeX notation ($...$, \\frac, \\sqrt, \\alpha, \\theta, \\int, \\sum, etc.) IS fully supported and encouraged for math/physics/chemistry equations! Our bot automatically renders LaTeX formulas into crisp, high-res dark-mode images. Feel free to use clear, standard LaTeX ($...$) for equations, expressions, and options."""
+
+LATEX & MATH MANDATE: You MUST use standard LaTeX math notation ($...$, \\frac{{a}}{{b}}, \\sqrt{{x}}, \\alpha, \\theta, \\int, \\sum, x^2, \\lim, etc.) for ALL mathematical expressions, formulas, physics equations, and answer options! Our bot automatically renders all LaTeX formulas into crisp, high-res dark-mode images for Discord. ALWAYS write proper LaTeX ($...$) for any mathematical content."""
         draft = await _call_gemini(draft_prompt, fallback="", timeout=timeout_val, model_preference=pref, max_output_tokens=tokens)
         if not draft:
             logging.warning("[PUZZLE PIPELINE] Failed to get draft.")
@@ -1192,8 +1193,8 @@ Final Draft:
 Feedback:
 {critique_3}
 
-FORMATTING INSTRUCTIONS:
-- You may use standard LaTeX ($...$, \\frac, \\sqrt, \\alpha, \\theta, \\int, \\sum, etc.) for math equations, formulas, and expressions.
+LATEX & MATH MANDATE:
+- You MUST use standard LaTeX ($...$, \\frac{{a}}{{b}}, \\sqrt{{x}}, \\alpha, \\theta, \\int, \\sum, etc.) for all math equations, formulas, expressions, and options.
 - Keep JSON structure strictly valid.
 
 Respond ONLY with a JSON object in this format (no markdown, no extra text):
