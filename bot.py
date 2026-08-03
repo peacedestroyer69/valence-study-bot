@@ -207,6 +207,8 @@ def calculate_pomodoro_study_seconds(start_time: int, end_time: int) -> int:
 # --- Firestore Ops Tracking & In-Memory Data Cache ---
 _CACHED_DATA: dict = {}
 _DB_OPS_TRACKER: dict = {}  # Key: "YYYY-MM-DD_HH" -> {"study_bot_reads": int, "study_bot_writes": int, "task_bot_reads": int, "task_bot_writes": int}
+_DIRTY_USERS: set = set()   # User IDs that need syncing to Firestore
+_META_DIRTY: bool = False    # Whether meta doc needs syncing
 
 def _record_db_op(op_type: str, bot_name: str = "study_bot", count: int = 1):
     """Tracks a database operation (read/write) per hour for dashboard analytics."""
@@ -226,6 +228,9 @@ async def load_data() -> dict:
     NOTE: This function does NOT acquire any lock. Callers that need to
     read-modify-write must wrap the entire sequence in `bot.db_write_lock`."""
     global _CACHED_DATA
+
+    if _CACHED_DATA and _CACHED_DATA.get("users"):
+        return _CACHED_DATA
 
     if db:
         try:
@@ -333,25 +338,16 @@ async def load_data() -> dict:
 
 
 async def save_data(data: dict):
-    """Saves data to Firestore (document-per-user) and local JSON file.
+    """Saves data locally and marks it dirty for background Firestore sync.
     Callers MUST hold `bot.db_write_lock` before calling this."""
-    global _CACHED_DATA
+    global _CACHED_DATA, _DIRTY_USERS, _META_DIRTY
     if data and data.get("users"):
         _CACHED_DATA = data  # Immediately update in-memory cache
 
-    if db:
-        try:
-            def push_db_data():
-                # Save metadata
-                db.collection('bot_data').document('meta').set(data.get("meta", {}))
-                # Save each user individually
-                users = data.get("users", {})
-                for uid, udata in users.items():
-                    db.collection('study_users').document(uid).set(udata)
-                _record_db_op("write", bot_name="study_bot", count=len(users) + 1)
-            await asyncio.to_thread(push_db_data)
-        except Exception as e:
-            logging.error(f"Firestore write error: {e}")
+    # Mark data as dirty
+    _META_DIRTY = True
+    users = data.get("users", {})
+    _DIRTY_USERS.update(users.keys())
 
     # Local JSON fallback
     def save_local_sync():
@@ -372,6 +368,51 @@ async def save_data(data: dict):
             logging.error(f"Failed to save data file: {e}")
 
     await asyncio.to_thread(save_local_sync)
+
+
+async def _firestore_sync():
+    """Syncs only dirty (changed) data to Firestore. Called periodically."""
+    global _META_DIRTY
+    if not db:
+        return
+    dirty_uids = list(_DIRTY_USERS)
+    _DIRTY_USERS.clear()
+    sync_meta = _META_DIRTY
+    _META_DIRTY = False
+    if not dirty_uids and not sync_meta:
+        return
+    try:
+        def push_dirty():
+            count = 0
+            if sync_meta and _CACHED_DATA.get("meta"):
+                db.collection('bot_data').document('meta').set(_CACHED_DATA["meta"])
+                count += 1
+            users = _CACHED_DATA.get("users", {})
+            for uid in dirty_uids:
+                udata = users.get(uid)
+                if udata:
+                    db.collection('study_users').document(uid).set(udata)
+                    count += 1
+            _record_db_op("write", bot_name="study_bot", count=count)
+            return count
+        count = await asyncio.to_thread(push_dirty)
+        if count > 0:
+            logging.info(f"[FIRESTORE SYNC] Pushed {count} docs ({len(dirty_uids)} users, meta={'yes' if sync_meta else 'no'})")
+    except Exception as e:
+        _DIRTY_USERS.update(dirty_uids)
+        if sync_meta:
+            _META_DIRTY = True
+        logging.error(f"[FIRESTORE SYNC] Error: {e}")
+
+async def _firestore_sync_loop():
+    """Periodic loop that syncs dirty data to Firestore every 5 minutes."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            await _firestore_sync()
+        except Exception as e:
+            logging.error(f"[FIRESTORE SYNC LOOP] Error: {e}")
+        await asyncio.sleep(300)  # 5 minutes
 
 
 
@@ -2486,6 +2527,7 @@ async def on_ready():
         asyncio.create_task(pomodoro_status_loop())
         asyncio.create_task(weekly_graph_dm_loop())
         asyncio.create_task(flush_message_buffer_loop())
+        asyncio.create_task(_firestore_sync_loop())
         # Keepalive server is started in main() — don't start it again here
 
     # Initialize shared aiohttp session for voice status updates etc.
@@ -3610,6 +3652,28 @@ async def db_stats_command(
     except Exception as e:
         logging.error(f"Error generating /db_stats: {e}", exc_info=True)
         await interaction.followup.send(f"❌ Error generating DB stats: {e}", ephemeral=True)
+
+
+@bot.tree.command(name='tex', description='Render a LaTeX formula as a dark-mode image')
+@app_commands.describe(formula='LaTeX formula to render (e.g. e^{i\\pi} + 1 = 0)')
+async def tex_command(interaction: discord.Interaction, formula: str):
+    """Renders LaTeX formula as a high-res dark-mode PNG image."""
+    await interaction.response.defer()
+    try:
+        from utils import render_latex_image
+        loop = asyncio.get_running_loop()
+        img_buf = await loop.run_in_executor(None, render_latex_image, formula, "")
+        file = discord.File(img_buf, filename="formula.png")
+        embed = discord.Embed(
+            title="📐 LaTeX Formula",
+            color=0x5865F2
+        )
+        embed.set_image(url="attachment://formula.png")
+        embed.set_footer(text=f"Input: {formula[:100]}")
+        await interaction.followup.send(embed=embed, file=file)
+    except Exception as e:
+        logging.error(f"Error in /tex: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error rendering formula: {e}", ephemeral=True)
 
 
 @bot.tree.command(name='checkin', description='Check in with your study plan for today')

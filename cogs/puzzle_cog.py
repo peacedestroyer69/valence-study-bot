@@ -14,7 +14,7 @@ import os
 from utils import (
     get_ist_now, get_ist_date, IST_TZ,
     PUZZLE_CHANNEL_ID, GENERAL_CHANNEL_ID, VALENCE_ID, UJJWAL_ID, STUDY_CHANNELS,
-    DAILY_GOAL_SECONDS
+    DAILY_GOAL_SECONDS, render_latex_image
 )
 from cogs.gemini_brain import generate_puzzle, _LOGIC_VERIFICATION_PUZZLES, strip_latex
 
@@ -37,6 +37,69 @@ def _safe_field(text: str, limit: int = 1024) -> str:
     if len(text) <= limit:
         return text
     return text[:limit - 3] + "..."
+
+
+import re as _re
+
+def _has_math(text: str) -> bool:
+    """Detect if text contains mathematical notation worth rendering as an image."""
+    if not text:
+        return False
+    math_patterns = [
+        r'[²³⁴⁵⁶⁷⁸⁹⁰]',      # Unicode superscripts
+        r'[₀₁₂₃₄₅₆₇₈₉]',      # Unicode subscripts  
+        r'[αβγδεζηθικλμνξπρστυφχψω]',  # Greek letters
+        r'[√∑∏∫∂∇]',            # Math operators
+        r'[≤≥≠≈∞±×÷]',          # Math relations
+        r'\d+/\d+',             # Fractions like 3/4
+    ]
+    for pattern in math_patterns:
+        if _re.search(pattern, text):
+            return True
+    return False
+
+
+def _render_puzzle_math(question: str, options: dict) -> 'BytesIO | None':
+    """If a puzzle has significant math content, render it as a dark-mode PNG image."""
+    full_text = question + ' ' + ' '.join(options.values())
+    if not _has_math(full_text):
+        return None
+    try:
+        from io import BytesIO
+        from matplotlib.figure import Figure
+        
+        fig = Figure(figsize=(8, 3.5), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.axis('off')
+        
+        # Build formatted text
+        lines = [question, '']
+        for key, val in options.items():
+            lines.append(f'{key}.  {val}')
+        display_text = '\n'.join(lines)
+        
+        ax.text(
+            0.05, 0.95,
+            display_text,
+            color='white',
+            fontsize=11,
+            ha='left',
+            va='top',
+            fontfamily='monospace',
+            transform=ax.transAxes,
+            linespacing=1.6
+        )
+        
+        fig.tight_layout()
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        logging.warning(f"[PUZZLE MATH RENDER] Failed: {e}")
+        return None
 
 
 # ============================================================
@@ -389,6 +452,14 @@ class PuzzleCog(commands.Cog):
                 description=desc_text,
                 color=0x5865F2,
             )
+
+            # Render math as dark-mode image if puzzle contains equations
+            math_img = _render_puzzle_math(puzzle['question'], opts)
+            puzzle_file = None
+            if math_img:
+                puzzle_file = discord.File(math_img, filename='puzzle_math.png')
+                embed.set_image(url='attachment://puzzle_math.png')
+
             embed.add_field(
                 name="\U0001f4cb Rules",
                 value=(
@@ -411,7 +482,11 @@ class PuzzleCog(commands.Cog):
                 if member.bot:
                     continue
                 try:
-                    await member.send(embed=embed, view=view)
+                    if puzzle_file:
+                        puzzle_file.reset()
+                        await member.send(embed=embed, view=view, file=puzzle_file)
+                    else:
+                        await member.send(embed=embed, view=view)
                     dm_count += 1
                     await asyncio.sleep(0.5)
                 except discord.Forbidden:
@@ -504,6 +579,14 @@ class PuzzleCog(commands.Cog):
                 description=desc_text,
                 color=0x9B59B6,
             )
+
+            # Render math as dark-mode image if puzzle contains equations
+            math_img = _render_puzzle_math(puzzle['question'], opts)
+            puzzle_file = None
+            if math_img:
+                puzzle_file = discord.File(math_img, filename='puzzle_math.png')
+                embed.set_image(url='attachment://puzzle_math.png')
+
             embed.add_field(
                 name="📋 Rules",
                 value=(
@@ -517,11 +600,16 @@ class PuzzleCog(commands.Cog):
             embed.set_footer(text="YPT Study Bot • Weekly Mega Puzzle")
 
             view = WeeklyPuzzleAnswerView(self)
-            msg = await channel.send(
-                content="🧠 **A new Weekly Mega Puzzle has been posted!**",
-                embed=embed,
-                view=view
-            )
+            
+            send_kwargs = {
+                "content": "🧠 **A new Weekly Mega Puzzle has been posted!**",
+                "embed": embed,
+                "view": view
+            }
+            if puzzle_file:
+                send_kwargs["file"] = puzzle_file
+                
+            msg = await channel.send(**send_kwargs)
 
             async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
