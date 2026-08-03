@@ -16,7 +16,7 @@ from utils import (
     PUZZLE_CHANNEL_ID, GENERAL_CHANNEL_ID, VALENCE_ID, UJJWAL_ID, STUDY_CHANNELS,
     DAILY_GOAL_SECONDS
 )
-from cogs.gemini_brain import generate_puzzle, _LOGIC_VERIFICATION_PUZZLES
+from cogs.gemini_brain import generate_puzzle, _LOGIC_VERIFICATION_PUZZLES, strip_latex
 
 PUZZLE_SOLVED_ROLE_ID = int(os.getenv("PUZZLE_SOLVED_ROLE_ID", "0"))
 SERVER_INVITE_LINK = os.getenv("SERVER_INVITE_LINK", "")
@@ -28,6 +28,15 @@ PUZZLE_TOPICS = ["jee", "logic", "jee", "mixed", "logic", "jee", "mixed"]
 VERIFY_PUZZLES_REQUIRED = 3
 # Hours between re-verify attempts after failure
 VERIFY_COOLDOWN_HOURS = 24
+
+
+def _safe_field(text: str, limit: int = 1024) -> str:
+    """Truncate text to fit within Discord embed field value limit (1024 chars)."""
+    if not text:
+        return "N/A"
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
 
 
 # ============================================================
@@ -371,9 +380,13 @@ class PuzzleCog(commands.Cog):
             opts = puzzle["options"]
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
 
+            desc_text = strip_latex(f"**{puzzle['question']}**\n\n{options_str}")
+            if len(desc_text) > 4096:
+                desc_text = desc_text[:4093] + "..."
+
             embed = discord.Embed(
                 title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')}",
-                description=f"**{puzzle['question']}**\n\n{options_str}",
+                description=desc_text,
                 color=0x5865F2,
             )
             embed.add_field(
@@ -482,9 +495,13 @@ class PuzzleCog(commands.Cog):
             opts = puzzle["options"]
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
 
+            desc_text = strip_latex(f"**{puzzle['question']}**\n\n{options_str}")
+            if len(desc_text) > 4096:
+                desc_text = desc_text[:4093] + "..."
+
             embed = discord.Embed(
                 title=f"🧠 Weekly Mega Puzzle — Week of {expected_start.strftime('%d %b %Y')}",
-                description=f"**{puzzle['question']}**\n\n{options_str}",
+                description=desc_text,
                 color=0x9B59B6,
             )
             embed.add_field(
@@ -617,7 +634,7 @@ class PuzzleCog(commands.Cog):
                 
                 embed.add_field(
                     name="🎉 The Solvers (Shoutout!)",
-                    value="\n".join(shoutout_lines),
+                    value=_safe_field("\n".join(shoutout_lines)),
                     inline=False
                 )
             else:
@@ -646,7 +663,7 @@ class PuzzleCog(commands.Cog):
             if incorrect_list:
                 embed.add_field(
                     name="❌ Valorous Attempts (Incorrect)",
-                    value="\n".join(incorrect_list),
+                    value=_safe_field("\n".join(incorrect_list)),
                     inline=False
                 )
 
@@ -660,9 +677,16 @@ class PuzzleCog(commands.Cog):
                     f"• **Total Solvers:** {len(solvers)}\n"
                     f"• **Total Attempting Users:** {total_unique_attempts}\n"
                     f"• **Success Rate:** {success_rate}%\n"
-                    f"• **Solution Answer:** **{weekly_puzzle.get('answer', 'N/A')}**\n"
-                    f"• **Explanation:** {weekly_puzzle.get('explanation', 'N/A')}"
+                    f"• **Solution Answer:** **{weekly_puzzle.get('answer', 'N/A')}**"
                 ),
+                inline=False
+            )
+
+            # Explanation in its own field (can be very long)
+            explanation_text = strip_latex(weekly_puzzle.get('explanation', 'N/A'))
+            embed.add_field(
+                name="📝 Explanation",
+                value=_safe_field(explanation_text),
                 inline=False
             )
 

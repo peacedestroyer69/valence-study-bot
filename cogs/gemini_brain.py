@@ -12,6 +12,7 @@ import json
 import logging
 import asyncio
 import random
+import re
 
 try:
     from google import genai
@@ -927,6 +928,121 @@ def clean_message_text(text: str) -> str:
         text = text[:1797] + "..."
     return text.strip()
 
+
+def strip_latex(text: str) -> str:
+    """Convert LaTeX math notation to readable plain text / Unicode for Discord.
+    Discord cannot render LaTeX, so we convert common patterns to readable equivalents."""
+    if not text or '$' not in text and '\\' not in text:
+        return text  # Fast path: no LaTeX detected
+
+    # Greek letters -> Unicode
+    _GREEK = {
+        r'\alpha': 'α', r'\beta': 'β', r'\gamma': 'γ', r'\delta': 'δ',
+        r'\epsilon': 'ε', r'\zeta': 'ζ', r'\eta': 'η', r'\theta': 'θ',
+        r'\iota': 'ι', r'\kappa': 'κ', r'\lambda': 'λ', r'\mu': 'μ',
+        r'\nu': 'ν', r'\xi': 'ξ', r'\pi': 'π', r'\rho': 'ρ',
+        r'\sigma': 'σ', r'\tau': 'τ', r'\upsilon': 'υ', r'\phi': 'φ',
+        r'\chi': 'χ', r'\psi': 'ψ', r'\omega': 'ω',
+        r'\Alpha': 'Α', r'\Beta': 'Β', r'\Gamma': 'Γ', r'\Delta': 'Δ',
+        r'\Epsilon': 'Ε', r'\Zeta': 'Ζ', r'\Eta': 'Η', r'\Theta': 'Θ',
+        r'\Lambda': 'Λ', r'\Xi': 'Ξ', r'\Pi': 'Π', r'\Sigma': 'Σ',
+        r'\Phi': 'Φ', r'\Psi': 'Ψ', r'\Omega': 'Ω',
+        r'\infty': '∞', r'\pm': '±', r'\mp': '∓', r'\times': '×',
+        r'\div': '÷', r'\cdot': '·', r'\leq': '≤', r'\geq': '≥',
+        r'\neq': '≠', r'\approx': '≈', r'\equiv': '≡', r'\propto': '∝',
+        r'\partial': '∂', r'\nabla': '∇', r'\sum': 'Σ', r'\prod': 'Π',
+        r'\int': '∫', r'\sqrt': '√', r'\leftarrow': '←', r'\rightarrow': '→',
+        r'\Leftarrow': '⇐', r'\Rightarrow': '⇒', r'\leftrightarrow': '↔',
+        r'\in': '∈', r'\notin': '∉', r'\subset': '⊂', r'\supset': '⊃',
+        r'\cup': '∪', r'\cap': '∩', r'\forall': '∀', r'\exists': '∃',
+        r'\angle': '∠', r'\degree': '°', r'\circ': '°',
+        r'\dagger': '†', r'\ddagger': '‡',
+        r'\hbar': 'ℏ', r'\ell': 'ℓ',
+    }
+
+    # Superscript digits
+    _SUPER = str.maketrans('0123456789+-=()ni', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ')
+    # Subscript digits
+    _SUB = str.maketrans('0123456789+-=()aeiou', '₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₒᵤ')
+
+    # Replace Greek and math symbols
+    for latex_cmd, unicode_char in _GREEK.items():
+        text = text.replace(latex_cmd, unicode_char)
+
+    # \frac{a}{b} -> (a)/(b)
+    text = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'(\1)/(\2)', text)
+
+    # \sqrt{x} -> √(x)
+    text = re.sub(r'\\sqrt\{([^}]*)\}', r'√(\1)', text)
+
+    # \tilde{x} -> x̃
+    text = re.sub(r'\\tilde\{([^}]*)\}', r'\1̃', text)
+    # \hat{x} -> x̂
+    text = re.sub(r'\\hat\{([^}]*)\}', r'\1̂', text)
+    # \bar{x} -> x̄
+    text = re.sub(r'\\bar\{([^}]*)\}', r'\1̄', text)
+    # \vec{x} -> x⃗
+    text = re.sub(r'\\vec\{([^}]*)\}', r'\1⃗', text)
+
+    # \mathbb{R} -> ℝ, \mathbb{Z} -> ℤ, etc.
+    _MATHBB = {'R': 'ℝ', 'Z': 'ℤ', 'N': 'ℕ', 'Q': 'ℚ', 'C': 'ℂ'}
+    def _replace_mathbb(m):
+        return _MATHBB.get(m.group(1), m.group(1))
+    text = re.sub(r'\\mathbb\{([A-Z])\}', _replace_mathbb, text)
+
+    # ^{...} -> superscript  (simple cases)
+    def _superscript(m):
+        return m.group(1).translate(_SUPER)
+    text = re.sub(r'\^\{([^}]*)\}', _superscript, text)
+    # ^x for single char
+    text = re.sub(r'\^([0-9n])', lambda m: m.group(1).translate(_SUPER), text)
+
+    # _{...} -> subscript
+    def _subscript(m):
+        return m.group(1).translate(_SUB)
+    text = re.sub(r'_\{([^}]*)\}', _subscript, text)
+    # _x for single char
+    text = re.sub(r'_([0-9])', lambda m: m.group(1).translate(_SUB), text)
+
+    # \text{...} -> just the text
+    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
+    # \mathrm{...} -> just the text
+    text = re.sub(r'\\mathrm\{([^}]*)\}', r'\1', text)
+    # \mathbf{...} -> bold markers
+    text = re.sub(r'\\mathbf\{([^}]*)\}', r'**\1**', text)
+
+    # \left( \right) -> ( )
+    text = re.sub(r'\\left([(\[|])', r'\1', text)
+    text = re.sub(r'\\right([)\]|])', r'\1', text)
+    text = text.replace(r'\left\{', '{').replace(r'\right\}', '}')
+
+    # \sim -> ~
+    text = text.replace(r'\sim', '~')
+    # \quad, \qquad -> space
+    text = text.replace(r'\qquad', '  ').replace(r'\quad', ' ')
+    # \, \; \: \! -> thin spaces or nothing
+    text = re.sub(r'\\[,;:!]', ' ', text)
+
+    # Strip display math delimiters: \[...\] and \(...\)
+    text = text.replace(r'\[', '').replace(r'\]', '')
+    text = text.replace(r'\(', '').replace(r'\)', '')
+
+    # Strip dollar sign delimiters: $$...$$ and $...$
+    text = re.sub(r'\$\$(.+?)\$\$', r'\1', text, flags=re.DOTALL)
+    text = re.sub(r'\$(.+?)\$', r'\1', text)
+
+    # Clean remaining backslash commands we missed (e.g. \psi_n)
+    text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+
+    # Clean up stray curly braces
+    text = text.replace('{', '').replace('}', '')
+
+    # Clean up multiple spaces
+    text = re.sub(r'  +', ' ', text)
+
+    return text.strip()
+
+
 # ============================================================
 # 1. GENERATE PUZZLE WITH REFINEMENT & DOUBLE SOLVER
 # ============================================================
@@ -964,6 +1080,7 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
         draft_prompt = f"""You are the Brainstormer. Generate a draft of {challenge_desc}.
 It must have 4 options (A, B, C, D) and only one correct option.
 Output the puzzle draft including the question, the options, the correct answer, and your initial explanation.
+IMPORTANT: NEVER use LaTeX notation ($, \\frac, \\sqrt, \\alpha, etc.). Use plain text or Unicode math symbols (α, β, θ, π, √, ×, ÷, ², ³, etc.) instead.
 Provide it in clear text."""
         draft = await _call_gemini(draft_prompt, fallback="", timeout=timeout_val, model_preference=pref, max_output_tokens=tokens)
         if not draft:
@@ -1040,6 +1157,8 @@ Final Draft:
 
 Feedback:
 {critique_3}
+
+CRITICAL: NEVER use LaTeX notation ($, \\frac, \\sqrt, \\alpha, \\theta, etc.) anywhere in your output. Discord cannot render LaTeX. Instead use plain text, Unicode symbols (α, β, γ, θ, π, Σ, √, ×, ÷, ≤, ≥, ², ³, etc.), or write math expressions as readable text like "a²+b²=c²" or "√(x+1)" or "(a+b)/(c+d)".
 
 Respond ONLY with a JSON object in this format (no markdown, no extra text):
 {{
@@ -1132,6 +1251,11 @@ Respond ONLY with a JSON object:
             continue
 
         logging.info(f"[PUZZLE PIPELINE] Puzzle successfully verified twice! Topic: {topic}, Weekly: {is_weekly}")
+        # Sanitize LaTeX from all text fields before returning
+        candidate["question"] = strip_latex(candidate["question"])
+        candidate["explanation"] = strip_latex(candidate["explanation"])
+        for opt_key in candidate["options"]:
+            candidate["options"][opt_key] = strip_latex(candidate["options"][opt_key])
         return candidate
 
     logging.warning("[PUZZLE PIPELINE] All attempts failed to verify. Using static fallback.")
