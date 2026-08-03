@@ -386,3 +386,137 @@ def generate_ai_stats_chart(stats_data: dict) -> BytesIO:
     return buf
 
 
+def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Formula") -> BytesIO:
+    """
+    Renders LaTeX formula into a crisp dark-mode PNG image (TeXit style).
+    Uses matplotlib's built-in mathtext engine so no external TeX install is required.
+    """
+    fig = Figure(figsize=(7, 2.2), dpi=180)
+    fig.patch.set_facecolor('#2B2D31')  # Discord gray
+    ax = fig.subplots()
+    ax.set_facecolor('#1E1F22')         # Dark background
+
+    # Formatting formula string for matplotlib mathtext
+    formatted_formula = formula_text.strip()
+    if not formatted_formula.startswith('$') and not formatted_formula.endswith('$'):
+        formatted_formula = f"${formatted_formula}$"
+
+    try:
+        ax.text(
+            0.5, 0.5,
+            formatted_formula,
+            color='white',
+            fontsize=18,
+            ha='center',
+            va='center',
+            fontweight='bold'
+        )
+    except Exception as e:
+        # Fallback to plain text rendering if LaTeX syntax error occurs
+        logging.warning(f"[LATEX RENDER] Mathtext parse error: {e}. Falling back to plain text.")
+        ax.text(
+            0.5, 0.5,
+            formula_text,
+            color='#5865F2',
+            fontsize=14,
+            ha='center',
+            va='center',
+            fontstyle='italic'
+        )
+
+    ax.axis('off')
+
+    if title:
+        ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
+
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.15)
+    buf.seek(0)
+    return buf
+
+
+def generate_db_stats_chart(db_stats_data: dict, timeframe: str = "day") -> BytesIO:
+    """
+    Generates a dual-panel dashboard chart for Firestore Reads & Writes:
+    - Left: Reads vs Writes over time (hourly/daily) with dashed free quota limit lines
+    - Right: Bot-wise breakdown (YPT Study Bot vs Valence Task Bot) with distinct colors
+    """
+    fig = Figure(figsize=(10, 4.5), dpi=150)
+    fig.patch.set_facecolor('#2B2D31')
+
+    ax1, ax2 = fig.subplots(1, 2)
+    ax1.set_facecolor('#1E1F22')
+    ax2.set_facecolor('#1E1F22')
+
+    labels = db_stats_data.get("labels", ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"])
+    reads = db_stats_data.get("reads", [0] * len(labels))
+    writes = db_stats_data.get("writes", [0] * len(labels))
+    
+    study_bot_ops = db_stats_data.get("study_bot_ops", [0] * len(labels))
+    task_bot_ops = db_stats_data.get("task_bot_ops", [0] * len(labels))
+
+    x = list(range(len(labels)))
+
+    # Subplot 1: Reads vs Writes Line Chart with Limit Lines
+    ax1.plot(x, reads, color='#10B981', marker='o', linewidth=2, label='Reads (load_data)')
+    ax1.plot(x, writes, color='#F59E0B', marker='s', linewidth=2, label='Writes (save_data)')
+
+    # Quota reference lines (Free Tier Limits)
+    if timeframe == "day":
+        read_limit = 2083    # 50,000 / 24h
+        write_limit = 833    # 20,000 / 24h
+        limit_text_r = "Hourly Read Quota (2,083)"
+        limit_text_w = "Hourly Write Quota (833)"
+    else:
+        read_limit = 50000   # Daily Limit
+        write_limit = 20000  # Daily Limit
+        limit_text_r = "Daily Read Limit (50k)"
+        limit_text_w = "Daily Write Limit (20k)"
+
+    ax1.axhline(y=read_limit, color='#EF4444', linestyle='--', alpha=0.7, linewidth=1.2, label=limit_text_r)
+    ax1.axhline(y=write_limit, color='#EC4899', linestyle=':', alpha=0.7, linewidth=1.2, label=limit_text_w)
+
+    ax1.set_title('Firestore Operations (Reads vs Writes)', color='white', fontsize=11, fontweight='bold', pad=10)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, color='#B5BAC1', fontsize=8, rotation=30 if len(labels) > 8 else 0)
+    ax1.tick_params(axis='y', colors='#B5BAC1', labelsize=8)
+    ax1.legend(facecolor='#2B2D31', edgecolor='#4F545C', labelcolor='white', fontsize=7, loc='upper left')
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    ax1.spines['left'].set_visible(False)
+    ax1.spines['bottom'].set_color('#4F545C')
+    ax1.yaxis.grid(True, color='#2F3136', linestyle='--', alpha=0.5)
+
+    # Subplot 2: Bot Comparison (YPT Study Bot vs Valence Task Bot)
+    import numpy as np
+    width = 0.35
+    x_arr = np.arange(len(labels))
+
+    ax2.bar(x_arr - width/2, study_bot_ops, width, label='YPT Study Bot', color='#5865F2')
+    ax2.bar(x_arr + width/2, task_bot_ops, width, label='Valence Task Bot', color='#EB459E')
+
+    ax2.set_title('Bot Operations Comparison', color='white', fontsize=11, fontweight='bold', pad=10)
+    ax2.set_xticks(x_arr)
+    ax2.set_xticklabels(labels, color='#B5BAC1', fontsize=8, rotation=30 if len(labels) > 8 else 0)
+    ax2.tick_params(axis='y', colors='#B5BAC1', labelsize=8)
+    ax2.legend(facecolor='#2B2D31', edgecolor='#4F545C', labelcolor='white', fontsize=8)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['left'].set_visible(False)
+    ax2.spines['bottom'].set_color('#4F545C')
+    ax2.yaxis.grid(True, color='#2F3136', linestyle='--', alpha=0.5)
+
+    fig.suptitle(
+        f"Firestore Database Diagnostics ({timeframe.upper()} View)",
+        color='white', fontsize=12, fontweight='bold', y=0.98
+    )
+
+    fig.tight_layout()
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    return buf
+
+
+

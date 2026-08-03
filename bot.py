@@ -204,10 +204,29 @@ def calculate_pomodoro_study_seconds(start_time: int, end_time: int) -> int:
     return total_study
 
 
+# --- Firestore Ops Tracking & In-Memory Data Cache ---
+_CACHED_DATA: dict = {}
+_DB_OPS_TRACKER: dict = {}  # Key: "YYYY-MM-DD_HH" -> {"study_bot_reads": int, "study_bot_writes": int, "task_bot_reads": int, "task_bot_writes": int}
+
+def _record_db_op(op_type: str, bot_name: str = "study_bot", count: int = 1):
+    """Tracks a database operation (read/write) per hour for dashboard analytics."""
+    now_ist = get_ist_now()
+    hour_key = now_ist.strftime("%Y-%m-%d_%H")
+    if hour_key not in _DB_OPS_TRACKER:
+        _DB_OPS_TRACKER[hour_key] = {
+            "study_bot_reads": 0, "study_bot_writes": 0,
+            "task_bot_reads": 0, "task_bot_writes": 0
+        }
+    key_name = f"{bot_name}_{op_type}s"
+    _DB_OPS_TRACKER[hour_key][key_name] = _DB_OPS_TRACKER[hour_key].get(key_name, 0) + count
+
+
 async def load_data() -> dict:
-    """Reads and returns the JSON data from Firestore (document-per-user), falls back to local JSON if missing.
+    """Reads and returns the JSON data from Firestore (document-per-user), falls back to in-memory cache / local JSON if missing.
     NOTE: This function does NOT acquire any lock. Callers that need to
     read-modify-write must wrap the entire sequence in `bot.db_write_lock`."""
+    global _CACHED_DATA
+
     if db:
         try:
             def fetch_db_data():
@@ -223,6 +242,8 @@ async def load_data() -> dict:
                 users_coll = db.collection('study_users').stream()
                 users_list = list(users_coll)
                 
+                _record_db_op("read", bot_name="study_bot", count=len(users_list) + 2)
+
                 # Migration condition: legacy document exists and users collection is empty
                 if legacy_doc.exists and not users_list:
                     logging.info("[DB MIGRATION] Migrating monolithic Firestore document to document-per-user schema.")
@@ -262,9 +283,17 @@ async def load_data() -> dict:
                     
                 return data
                 
-            return await asyncio.to_thread(fetch_db_data)
+            data = await asyncio.to_thread(fetch_db_data)
+            if data and data.get("users"):
+                _CACHED_DATA = data  # Update in-memory cache on successful Firestore load
+            return data
         except Exception as e:
-            logging.error(f"Firestore read error: {e}. Falling back to local.")
+            logging.error(f"Firestore read error: {e}. Falling back to in-memory cache / local JSON.")
+
+    # Return memory cache if available to prevent data wipe on 429 errors
+    if _CACHED_DATA and _CACHED_DATA.get("users"):
+        logging.info("[DB CACHE] Using in-memory cached data during Firestore quota/network error.")
+        return _CACHED_DATA
 
     # Local JSON fallback with asyncio.to_thread to prevent event loop blocking
     def load_local_sync():
@@ -297,12 +326,19 @@ async def load_data() -> dict:
                 json.dump(data, f, indent=2)
             return data
 
-    return await asyncio.to_thread(load_local_sync)
+    local_data = await asyncio.to_thread(load_local_sync)
+    if local_data and local_data.get("users"):
+        _CACHED_DATA = local_data
+    return local_data
 
 
 async def save_data(data: dict):
     """Saves data to Firestore (document-per-user) and local JSON file.
     Callers MUST hold `bot.db_write_lock` before calling this."""
+    global _CACHED_DATA
+    if data and data.get("users"):
+        _CACHED_DATA = data  # Immediately update in-memory cache
+
     if db:
         try:
             def push_db_data():
@@ -312,6 +348,7 @@ async def save_data(data: dict):
                 users = data.get("users", {})
                 for uid, udata in users.items():
                     db.collection('study_users').document(uid).set(udata)
+                _record_db_op("write", bot_name="study_bot", count=len(users) + 1)
             await asyncio.to_thread(push_db_data)
         except Exception as e:
             logging.error(f"Firestore write error: {e}")
@@ -3407,6 +3444,151 @@ async def ai_reset_stats_command(interaction: discord.Interaction):
     except Exception as e:
         logging.error(f"Error resetting AI stats: {e}")
         await interaction.followup.send(f"❌ Error resetting AI stats: {e}", ephemeral=True)
+
+
+@bot.tree.command(name='db_stats', description='Database diagnostics: Firestore Reads, Writes, quota limits, and bot comparisons')
+@app_commands.describe(
+    timeframe='Timeframe to display (day = 24h hourly, week = 7-day daily)',
+    bot_filter='Filter by bot (all = combined, study_bot = YPT Study Bot, task_bot = Valence Task Bot)',
+    metric='Filter by metric (all, reads, writes)'
+)
+@app_commands.choices(
+    timeframe=[
+        app_commands.Choice(name="Day (24-Hour Hourly)", value="day"),
+        app_commands.Choice(name="Week (7-Day Daily)", value="week"),
+    ],
+    bot_filter=[
+        app_commands.Choice(name="All Bots (Combined)", value="all"),
+        app_commands.Choice(name="YPT Study Bot", value="study_bot"),
+        app_commands.Choice(name="Valence Task Bot", value="task_bot"),
+    ],
+    metric=[
+        app_commands.Choice(name="All Metrics (Reads + Writes)", value="all"),
+        app_commands.Choice(name="Reads Only", value="reads"),
+        app_commands.Choice(name="Writes Only", value="writes"),
+    ]
+)
+async def db_stats_command(
+    interaction: discord.Interaction,
+    timeframe: app_commands.Choice[str] = None,
+    bot_filter: app_commands.Choice[str] = None,
+    metric: app_commands.Choice[str] = None
+):
+    """Generates an interactive diagnostic dashboard chart for Firestore Reads/Writes and Quotas."""
+    await interaction.response.defer()
+    try:
+        tf_val = timeframe.value if timeframe else "day"
+        bot_val = bot_filter.value if bot_filter else "all"
+        met_val = metric.value if metric else "all"
+
+        now_ist = get_ist_now()
+        labels = []
+        reads = []
+        writes = []
+        study_bot_ops = []
+        task_bot_ops = []
+
+        if tf_val == "day":
+            # 24-hour breakdown
+            for h in range(23, -1, -1):
+                t_dt = now_ist - datetime.timedelta(hours=h)
+                hour_key = t_dt.strftime("%Y-%m-%d_%H")
+                labels.append(t_dt.strftime("%H:00"))
+                stats = _DB_OPS_TRACKER.get(hour_key, {})
+                
+                s_reads = stats.get("study_bot_reads", 0)
+                s_writes = stats.get("study_bot_writes", 0)
+                t_reads = stats.get("task_bot_reads", 0)
+                t_writes = stats.get("task_bot_writes", 0)
+
+                if bot_val == "study_bot":
+                    r_val = s_reads
+                    w_val = s_writes
+                elif bot_val == "task_bot":
+                    r_val = t_reads
+                    w_val = t_writes
+                else:
+                    r_val = s_reads + t_reads
+                    w_val = s_writes + t_writes
+
+                if met_val == "reads":
+                    w_val = 0
+                elif met_val == "writes":
+                    r_val = 0
+
+                reads.append(r_val)
+                writes.append(w_val)
+                study_bot_ops.append(s_reads + s_writes)
+                task_bot_ops.append(t_reads + t_writes)
+        else:
+            # 7-day breakdown
+            for d in range(6, -1, -1):
+                t_dt = now_ist - datetime.timedelta(days=d)
+                day_prefix = t_dt.strftime("%Y-%m-%d")
+                labels.append(t_dt.strftime("%a %d"))
+
+                day_s_reads = sum(v.get("study_bot_reads", 0) for k, v in _DB_OPS_TRACKER.items() if k.startswith(day_prefix))
+                day_s_writes = sum(v.get("study_bot_writes", 0) for k, v in _DB_OPS_TRACKER.items() if k.startswith(day_prefix))
+                day_t_reads = sum(v.get("task_bot_reads", 0) for k, v in _DB_OPS_TRACKER.items() if k.startswith(day_prefix))
+                day_t_writes = sum(v.get("task_bot_writes", 0) for k, v in _DB_OPS_TRACKER.items() if k.startswith(day_prefix))
+
+                if bot_val == "study_bot":
+                    r_val = day_s_reads
+                    w_val = day_s_writes
+                elif bot_val == "task_bot":
+                    r_val = day_t_reads
+                    w_val = day_t_writes
+                else:
+                    r_val = day_s_reads + day_t_reads
+                    w_val = day_s_writes + day_t_writes
+
+                if met_val == "reads":
+                    w_val = 0
+                elif met_val == "writes":
+                    r_val = 0
+
+                reads.append(r_val)
+                writes.append(w_val)
+                study_bot_ops.append(day_s_reads + day_s_writes)
+                task_bot_ops.append(day_t_reads + day_t_writes)
+
+        db_stats_payload = {
+            "labels": labels,
+            "reads": reads,
+            "writes": writes,
+            "study_bot_ops": study_bot_ops,
+            "task_bot_ops": task_bot_ops
+        }
+
+        from utils import generate_db_stats_chart
+        loop = asyncio.get_running_loop()
+        chart_buf = await loop.run_in_executor(None, generate_db_stats_chart, db_stats_payload, tf_val)
+        file = discord.File(chart_buf, filename="db_stats.png")
+
+        total_r = sum(reads)
+        total_w = sum(writes)
+        tot_ops = total_r + total_w
+        free_tier_pct = int((total_r / 50000) * 100) if tf_val == "week" else int((total_r / (2083 * len(labels))) * 100) if len(labels) > 0 else 0
+
+        embed = discord.Embed(
+            title=f"📊 Firestore Database Diagnostics — {tf_val.upper()} View",
+            description=(
+                f"• **Filter**: Bot = `{bot_val}`, Metric = `{met_val}`\n"
+                f"• **Total Reads**: **{total_r:,}** | **Total Writes**: **{total_w:,}**\n"
+                f"• **Total Operations**: **{tot_ops:,}**\n"
+                f"• **Free Tier Usage**: **{free_tier_pct}%** of limit\n"
+                f"• **Cache Status**: In-Memory Cache Active 🛡️ (Protected against 429 reset)"
+            ),
+            color=0x10B981 if free_tier_pct < 80 else 0xEF4444,
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
+        )
+        embed.set_image(url="attachment://db_stats.png")
+        embed.set_footer(text="YPT Study Bot • Database Monitor")
+
+        await interaction.followup.send(embed=embed, file=file)
+    except Exception as e:
+        logging.error(f"Error generating /db_stats: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error generating DB stats: {e}", ephemeral=True)
 
 
 @bot.tree.command(name='checkin', description='Check in with your study plan for today')
