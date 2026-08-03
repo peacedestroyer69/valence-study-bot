@@ -429,12 +429,33 @@ def enforce_user_resets(udata: dict) -> bool:
 
 
 def ensure_user(data: dict, member: discord.Member) -> dict:
-    """Ensures a user entry exists in data and returns it."""
+    """Ensures a user entry exists in data and returns it. Performs single-user Firestore fetch if missing to prevent amnesia."""
     uid = str(member.id)
+    if "users" not in data:
+        data["users"] = {}
+
     if uid not in data["users"]:
-        data["users"][uid] = _default_user(member.display_name)
+        # Try fetching single user doc from Firestore before falling back to default 0-hour profile!
+        fetched_user = None
+        if db:
+            try:
+                doc_ref = db.collection('study_users').document(uid)
+                doc = doc_ref.get()
+                _record_db_op("read", bot_name="study_bot", count=1)
+                if doc.exists:
+                    fetched_user = doc.to_dict()
+                    logging.info(f"[DB RESTORE] Restored single user profile for {member.display_name} ({uid}) directly from Firestore.")
+            except Exception as e:
+                logging.warning(f"[DB RESTORE] Single-user Firestore fetch for {uid} failed: {e}")
+
+        if fetched_user:
+            data["users"][uid] = fetched_user
+            data["users"][uid]["username"] = member.display_name
+        else:
+            data["users"][uid] = _default_user(member.display_name)
     else:
         data["users"][uid]["username"] = member.display_name
+
     enforce_user_resets(data["users"][uid])
     return data["users"][uid]
 
