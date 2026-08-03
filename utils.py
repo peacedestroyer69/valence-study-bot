@@ -395,6 +395,7 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
     import re as _re
     import textwrap as _textwrap
 
+    # 1. Clean delimiters and normalize unsupported TeX constructs
     raw_cleaned = formula_text.strip()
     
     # Strip display and inline math delimiters: \[\], \(\), $$, $
@@ -405,17 +406,41 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
     
     # Normalize TeX macros for Matplotlib's mathtext parser
     mathtext_str = raw_cleaned
-    mathtext_str = mathtext_str.replace(r'\mathfrak', r'\mathbf')
-    mathtext_str = mathtext_str.replace(r'\mathbb', r'\mathbf')
-    mathtext_str = mathtext_str.replace(r'\text', r'\mathrm')
-    mathtext_str = _re.sub(r'\\substack\{([^}]*)\}', r'\1', mathtext_str)
-    mathtext_str = mathtext_str.replace(r'\varnothing', r'\emptyset')
-    mathtext_str = mathtext_str.replace(r'\!', '')
+
+    # Helper to strip \substack with proper nested-brace matching
+    while '\\substack' in mathtext_str:
+        idx = mathtext_str.find('\\substack')
+        start = mathtext_str.find('{', idx)
+        if start == -1:
+            break
+        depth = 1
+        curr = start + 1
+        while curr < len(mathtext_str) and depth > 0:
+            if mathtext_str[curr] == '{':
+                depth += 1
+            elif mathtext_str[curr] == '}':
+                depth -= 1
+            curr += 1
+        content = mathtext_str[start + 1:curr - 1].replace('\\\\', ' ')
+        mathtext_str = mathtext_str[:idx] + content + mathtext_str[curr:]
+
+    mathtext_str = _re.sub(r'\\mathfrak', r'\\mathbf', mathtext_str)
+    mathtext_str = _re.sub(r'\\isPartOf', r'\\in', mathtext_str)
+    mathtext_str = _re.sub(r'\\mathbb', r'\\mathbf', mathtext_str)
+    mathtext_str = _re.sub(r'\\text', r'\\mathrm', mathtext_str)
+    mathtext_str = _re.sub(r'\\exp\b', r'\\mathrm{exp}', mathtext_str)
+    mathtext_str = _re.sub(r'\\ltimes\b', r'\\times', mathtext_str)
+    mathtext_str = _re.sub(r'\\rtimes\b', r'\\times', mathtext_str)
+    mathtext_str = _re.sub(r'\\varnothing\b', r'\\emptyset', mathtext_str)
+    mathtext_str = _re.sub(r'\\bar\{([^}]*)\}', r'\\overline{\1}', mathtext_str)
+    mathtext_str = _re.sub(r'\\!\s*', ' ', mathtext_str)
     mathtext_str = _re.sub(r'\\left\s*\\\{', r'\\{', mathtext_str)
     mathtext_str = _re.sub(r'\\right\s*\\\}', r'\\}', mathtext_str)
     mathtext_str = _re.sub(r'\\left\s*([(\[|])', r'\1', mathtext_str)
     mathtext_str = _re.sub(r'\\right\s*([)\]|])', r'\1', mathtext_str)
-    mathtext_str = _re.sub(r'\\bar\{([A-Z])\}', r'\\overline{\1}', mathtext_str)
+    mathtext_str = _re.sub(r'\\cdots\b', r'\\dots', mathtext_str)
+    mathtext_str = _re.sub(r'\n+', ' ', mathtext_str)
+    mathtext_str = _re.sub(r'  +', ' ', mathtext_str)
 
     if not mathtext_str.startswith('$'):
         formatted_formula = f"${mathtext_str}$"
