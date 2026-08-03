@@ -186,78 +186,157 @@ def _smart_sanitize(text: str) -> str:
 
 # --- Rendering Functions ---
 
-def _render_puzzle_image(question: str, options: dict, title: str = "") -> 'BytesIO | None':
+def _render_puzzle_image(question: str, options: dict, title: str = "",
+                         raw_question: str = "", raw_options: dict = None) -> 'BytesIO | None':
     """Render puzzle question + options as a high-quality dark-mode PNG image.
-    Uses word-wrapping, proper spacing, and Discord-matching dark theme."""
+    
+    Two rendering modes:
+    1. LaTeX mode: If raw_question has LaTeX, use matplotlib mathtext for 
+       proper math typesetting (textbook-quality fractions, roots, integrals)
+    2. Plain mode: Word-wrapped Unicode text for non-math puzzles
+    """
     try:
         from io import BytesIO
         from matplotlib.figure import Figure
         
-        # Word-wrap question to ~55 chars per line for readability
-        wrapped_q = _textwrap.fill(question, width=55)
+        # Decide rendering mode
+        use_latex = bool(raw_question and _has_raw_latex(raw_question))
         
-        # Build formatted display text
-        lines = [wrapped_q, '']
-        for key, val in options.items():
-            wrapped_opt = _textwrap.fill(f'{key}.  {val}', width=55, subsequent_indent='    ')
-            lines.append(wrapped_opt)
-        display_text = '\n'.join(lines)
+        if use_latex:
+            # --- LATEX MODE: textbook-quality math rendering ---
+            # Build each piece as a separate mathtext element
+            fig = Figure(figsize=(8.5, 5.5), dpi=180)
+            fig.patch.set_facecolor('#2B2D31')
+            ax = fig.subplots()
+            ax.set_facecolor('#1E1F22')
+            ax.axis('off')
+            
+            # Subtle border
+            for spine in ax.spines.values():
+                spine.set_visible(True)
+                spine.set_color('#4F545C')
+                spine.set_linewidth(0.5)
+            
+            # Title
+            if title:
+                ax.text(0.05, 0.97, title,
+                        color='#5865F2', fontsize=9, fontweight='bold',
+                        ha='left', va='top', transform=ax.transAxes)
+            
+            # Render question with mathtext
+            # Wrap raw LaTeX in $ for matplotlib
+            q_latex = raw_question.strip()
+            # Strip existing $ delimiters to normalize
+            q_latex = _re.sub(r'^\$\$?|\$\$?$', '', q_latex)
+            # Split into math and text segments for mixed content
+            q_display = _textwrap.fill(question, width=60)  # fallback text
+            
+            try:
+                # Try rendering the raw LaTeX question via mathtext
+                ax.text(0.05, 0.88, f"$\\mathit{{{q_latex}}}$" if len(q_latex) < 80 else q_display,
+                        color='#DCDDDE', fontsize=12,
+                        ha='left', va='top', transform=ax.transAxes,
+                        linespacing=1.5)
+            except Exception:
+                # Mathtext failed, fall back to plain text
+                ax.text(0.05, 0.88, q_display,
+                        color='#DCDDDE', fontsize=11,
+                        ha='left', va='top', transform=ax.transAxes,
+                        fontfamily='DejaVu Sans', linespacing=1.6)
+            
+            # Render each option
+            raw_opts = raw_options or {}
+            y_pos = 0.55
+            for key in ['A', 'B', 'C', 'D']:
+                opt_raw = raw_opts.get(key, options.get(key, ''))
+                opt_clean = options.get(key, opt_raw)
+                
+                # Try rendering option with mathtext if it has LaTeX
+                label = f"{key}."
+                ax.text(0.06, y_pos, label,
+                        color='#5865F2', fontsize=11, fontweight='bold',
+                        ha='left', va='top', transform=ax.transAxes)
+                
+                if _has_raw_latex(opt_raw):
+                    opt_latex = _re.sub(r'^\$\$?|\$\$?$', '', opt_raw.strip())
+                    try:
+                        ax.text(0.11, y_pos, f"${opt_latex}$",
+                                color='#DCDDDE', fontsize=11,
+                                ha='left', va='top', transform=ax.transAxes)
+                    except Exception:
+                        ax.text(0.11, y_pos, opt_clean,
+                                color='#DCDDDE', fontsize=10.5,
+                                ha='left', va='top', transform=ax.transAxes,
+                                fontfamily='DejaVu Sans')
+                else:
+                    ax.text(0.11, y_pos, opt_clean,
+                            color='#DCDDDE', fontsize=10.5,
+                            ha='left', va='top', transform=ax.transAxes,
+                            fontfamily='DejaVu Sans')
+                y_pos -= 0.10
+            
+            fig.tight_layout(pad=0.3)
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.25)
+            buf.seek(0)
+            logging.info("[PUZZLE RENDER] Used LaTeX mathtext mode")
+            return buf
         
-        # Calculate dynamic figure height based on content
-        line_count = display_text.count('\n') + 1
-        fig_height = max(2.5, min(6.0, 0.35 * line_count + 0.8))
-        
-        fig = Figure(figsize=(8, fig_height), dpi=180)
-        fig.patch.set_facecolor('#2B2D31')
-        ax = fig.subplots()
-        ax.set_facecolor('#1E1F22')
-        ax.axis('off')
-        
-        # Add subtle border
-        for spine in ax.spines.values():
-            spine.set_visible(True)
-            spine.set_color('#4F545C')
-            spine.set_linewidth(0.5)
-        
-        # Title bar if provided
-        y_start = 0.95
-        if title:
-            ax.text(
-                0.05, 0.98, title,
-                color='#5865F2', fontsize=9, fontweight='bold',
-                ha='left', va='top', transform=ax.transAxes
-            )
-            y_start = 0.92
-        
-        # Main content
-        ax.text(
-            0.05, y_start,
-            display_text,
-            color='#DCDDDE',
-            fontsize=10.5,
-            ha='left',
-            va='top',
-            fontfamily='DejaVu Sans',
-            transform=ax.transAxes,
-            linespacing=1.7,
-            wrap=False
-        )
-        
-        fig.tight_layout(pad=0.3)
-        buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.25)
-        buf.seek(0)
-        return buf
+        else:
+            # --- PLAIN MODE: clean Unicode text ---
+            wrapped_q = _textwrap.fill(question, width=55)
+            
+            lines = [wrapped_q, '']
+            for key, val in options.items():
+                wrapped_opt = _textwrap.fill(f'{key}.  {val}', width=55, subsequent_indent='    ')
+                lines.append(wrapped_opt)
+            display_text = '\n'.join(lines)
+            
+            line_count = display_text.count('\n') + 1
+            fig_height = max(2.5, min(6.0, 0.35 * line_count + 0.8))
+            
+            fig = Figure(figsize=(8, fig_height), dpi=180)
+            fig.patch.set_facecolor('#2B2D31')
+            ax = fig.subplots()
+            ax.set_facecolor('#1E1F22')
+            ax.axis('off')
+            
+            for spine in ax.spines.values():
+                spine.set_visible(True)
+                spine.set_color('#4F545C')
+                spine.set_linewidth(0.5)
+            
+            y_start = 0.95
+            if title:
+                ax.text(0.05, 0.98, title,
+                        color='#5865F2', fontsize=9, fontweight='bold',
+                        ha='left', va='top', transform=ax.transAxes)
+                y_start = 0.92
+            
+            ax.text(0.05, y_start, display_text,
+                    color='#DCDDDE', fontsize=10.5,
+                    ha='left', va='top', fontfamily='DejaVu Sans',
+                    transform=ax.transAxes, linespacing=1.7, wrap=False)
+            
+            fig.tight_layout(pad=0.3)
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.25)
+            buf.seek(0)
+            logging.info("[PUZZLE RENDER] Used plain text mode")
+            return buf
     except Exception as e:
         logging.warning(f"[PUZZLE IMAGE RENDER] Failed: {e}")
         return None
 
 
-def _render_explanation_image(explanation: str) -> 'BytesIO | None':
-    """Render puzzle explanation as a dark-mode PNG for complex math explanations."""
+def _render_explanation_image(explanation: str, raw_explanation: str = "") -> 'BytesIO | None':
+    """Render puzzle explanation as a dark-mode PNG.
+    Uses matplotlib mathtext for LaTeX formulas if present in raw_explanation."""
     try:
         from io import BytesIO
         from matplotlib.figure import Figure
+        
+        use_latex = bool(raw_explanation and _has_raw_latex(raw_explanation))
         
         wrapped = _textwrap.fill(explanation, width=65)
         line_count = wrapped.count('\n') + 1
@@ -269,17 +348,38 @@ def _render_explanation_image(explanation: str) -> 'BytesIO | None':
         ax.set_facecolor('#1E1F22')
         ax.axis('off')
         
-        ax.text(
-            0.04, 0.96,
-            wrapped,
-            color='#DCDDDE',
-            fontsize=10,
-            ha='left',
-            va='top',
-            fontfamily='DejaVu Sans',
-            transform=ax.transAxes,
-            linespacing=1.6
-        )
+        if use_latex:
+            # Split explanation into text and math segments
+            # Render math parts with mathtext, text parts normally
+            # For now, render the clean version but try mathtext on individual formulas
+            parts = _re.split(r'(\$[^$]+\$)', raw_explanation)
+            y_pos = 0.96
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                if part.startswith('$') and part.endswith('$'):
+                    # Math segment — render with mathtext
+                    try:
+                        ax.text(0.04, y_pos, part,
+                                color='#E8E8E8', fontsize=11,
+                                ha='left', va='top', transform=ax.transAxes)
+                        y_pos -= 0.12
+                        continue
+                    except Exception:
+                        pass
+                # Plain text segment
+                segment = _textwrap.fill(_smart_sanitize(part), width=65)
+                ax.text(0.04, y_pos, segment,
+                        color='#DCDDDE', fontsize=10,
+                        ha='left', va='top', fontfamily='DejaVu Sans',
+                        transform=ax.transAxes, linespacing=1.6)
+                y_pos -= 0.06 * (segment.count('\n') + 1)
+        else:
+            ax.text(0.04, 0.96, wrapped,
+                    color='#DCDDDE', fontsize=10,
+                    ha='left', va='top', fontfamily='DejaVu Sans',
+                    transform=ax.transAxes, linespacing=1.6)
         
         fig.tight_layout(pad=0.2)
         buf = BytesIO()
@@ -352,14 +452,17 @@ def _readability_checkpoint(puzzle: dict) -> dict:
     # - OR text had LaTeX leaks (might still look bad)
     # - OR text has significant math content that benefits from proper rendering
     if score < 70 or (had_latex_leak and score < 85) or (has_math_content and score < 80):
-        question_image = _render_puzzle_image(clean_question, clean_options, "📐 Mathematical Puzzle")
+        question_image = _render_puzzle_image(
+            clean_question, clean_options, "📐 Mathematical Puzzle",
+            raw_question=question, raw_options=options
+        )
         if question_image:
             use_image = True
-            logging.info(f"[READABILITY] Rendering question as image (score={score}, math={has_math_content})")
+            logging.info(f"[READABILITY] Rendering question as image (score={score}, math={has_math_content}, raw_latex={had_latex_leak})")
     
     # Render explanation as image if it has complex math
     if explanation_score < 65 or (_has_math(clean_explanation) and explanation_score < 75):
-        explanation_image = _render_explanation_image(clean_explanation)
+        explanation_image = _render_explanation_image(clean_explanation, raw_explanation=explanation)
         if explanation_image:
             use_explanation_image = True
             logging.info(f"[READABILITY] Rendering explanation as image (score={explanation_score})")

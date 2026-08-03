@@ -1115,8 +1115,7 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
         draft_prompt = f"""You are the Brainstormer. Generate a draft of {challenge_desc}.
 It must have 4 options (A, B, C, D) and only one correct option.
 Output the puzzle draft including the question, the options, the correct answer, and your initial explanation.
-IMPORTANT: NEVER use LaTeX notation ($, \\frac, \\sqrt, \\alpha, etc.). Use plain text or Unicode math symbols (α, β, θ, π, √, ×, ÷, ², ³, etc.) instead.
-Provide it in clear text."""
+LATEX & MATH FORMATTING: Standard LaTeX notation ($...$, \\frac, \\sqrt, \\alpha, \\theta, \\int, \\sum, etc.) IS fully supported and encouraged for math/physics/chemistry equations! Our bot automatically renders LaTeX formulas into crisp, high-res dark-mode images. Feel free to use clear, standard LaTeX ($...$) for equations, expressions, and options."""
         draft = await _call_gemini(draft_prompt, fallback="", timeout=timeout_val, model_preference=pref, max_output_tokens=tokens)
         if not draft:
             logging.warning("[PUZZLE PIPELINE] Failed to get draft.")
@@ -1193,7 +1192,9 @@ Final Draft:
 Feedback:
 {critique_3}
 
-CRITICAL: NEVER use LaTeX notation ($, \\frac, \\sqrt, \\alpha, \\theta, etc.) anywhere in your output. Discord cannot render LaTeX. Instead use plain text, Unicode symbols (α, β, γ, θ, π, Σ, √, ×, ÷, ≤, ≥, ², ³, etc.), or write math expressions as readable text like "a²+b²=c²" or "√(x+1)" or "(a+b)/(c+d)".
+FORMATTING INSTRUCTIONS:
+- You may use standard LaTeX ($...$, \\frac, \\sqrt, \\alpha, \\theta, \\int, \\sum, etc.) for math equations, formulas, and expressions.
+- Keep JSON structure strictly valid.
 
 Respond ONLY with a JSON object in this format (no markdown, no extra text):
 {{
@@ -1286,11 +1287,7 @@ Respond ONLY with a JSON object:
             continue
 
         logging.info(f"[PUZZLE PIPELINE] Puzzle successfully verified twice! Topic: {topic}, Weekly: {is_weekly}")
-        # Sanitize LaTeX from all text fields before returning
-        candidate["question"] = strip_latex(candidate["question"])
-        candidate["explanation"] = strip_latex(candidate["explanation"])
-        for opt_key in candidate["options"]:
-            candidate["options"][opt_key] = strip_latex(candidate["options"][opt_key])
+        # Return candidate intact (raw LaTeX preserved for mathtext image renderer; readability checkpoint in puzzle_cog will handle Discord text sanitization)
         return candidate
 
     logging.warning("[PUZZLE PIPELINE] All attempts failed to verify. Using static fallback.")

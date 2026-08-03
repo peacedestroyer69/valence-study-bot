@@ -390,50 +390,114 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
     """
     Renders LaTeX formula into a crisp dark-mode PNG image (TeXit style).
     Uses matplotlib's built-in mathtext engine so no external TeX install is required.
+    Robustly handles complex TeX constructs, delimiters, and provides a guaranteed plain-text fallback.
     """
-    fig = Figure(figsize=(7, 2.2), dpi=180)
-    fig.patch.set_facecolor('#2B2D31')  # Discord gray
-    ax = fig.subplots()
-    ax.set_facecolor('#1E1F22')         # Dark background
+    import re as _re
+    import textwrap as _textwrap
 
-    # Formatting formula string for matplotlib mathtext
-    formatted_formula = formula_text.strip()
-    if not formatted_formula.startswith('$') and not formatted_formula.endswith('$'):
-        formatted_formula = f"${formatted_formula}$"
+    raw_cleaned = formula_text.strip()
+    
+    # Strip display and inline math delimiters: \[\], \(\), $$, $
+    raw_cleaned = _re.sub(r'^\s*\\\[|\s*\\\]\s*$', '', raw_cleaned)
+    raw_cleaned = _re.sub(r'^\s*\\\(\s*|\s*\\\)\s*$', '', raw_cleaned)
+    raw_cleaned = _re.sub(r'^\s*\$\$|\$\$\s*$', '', raw_cleaned)
+    raw_cleaned = _re.sub(r'^\s*\$|\$\s*$', '', raw_cleaned)
+    
+    # Normalize TeX macros for Matplotlib's mathtext parser
+    mathtext_str = raw_cleaned
+    mathtext_str = mathtext_str.replace(r'\mathfrak', r'\mathbf')
+    mathtext_str = mathtext_str.replace(r'\mathbb', r'\mathbf')
+    mathtext_str = mathtext_str.replace(r'\text', r'\mathrm')
+    mathtext_str = _re.sub(r'\\substack\{([^}]*)\}', r'\1', mathtext_str)
+    mathtext_str = mathtext_str.replace(r'\varnothing', r'\emptyset')
+    mathtext_str = mathtext_str.replace(r'\!', '')
+    mathtext_str = _re.sub(r'\\left\s*\\\{', r'\\{', mathtext_str)
+    mathtext_str = _re.sub(r'\\right\s*\\\}', r'\\}', mathtext_str)
+    mathtext_str = _re.sub(r'\\left\s*([(\[|])', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\right\s*([)\]|])', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\bar\{([A-Z])\}', r'\\overline{\1}', mathtext_str)
 
+    if not mathtext_str.startswith('$'):
+        formatted_formula = f"${mathtext_str}$"
+    else:
+        formatted_formula = mathtext_str
+
+    char_len = len(formatted_formula)
+    fig_width = max(7.0, min(14.0, char_len * 0.08))
+    fig_height = max(2.2, min(7.0, 0.4 * (formatted_formula.count('\n') + 1) + 1.8))
+
+    # Attempt primary Mathtext render pass
     try:
+        fig = Figure(figsize=(fig_width, fig_height), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.axis('off')
+
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('#4F545C')
+            spine.set_linewidth(0.5)
+
+        if title:
+            ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
+
+        fontsize_calc = max(11, min(18, int(220 / max(10, min(80, char_len)))))
         ax.text(
             0.5, 0.5,
             formatted_formula,
             color='white',
-            fontsize=18,
+            fontsize=fontsize_calc,
             ha='center',
             va='center',
-            fontweight='bold'
+            fontweight='bold',
+            transform=ax.transAxes
         )
-    except Exception as e:
-        # Fallback to plain text rendering if LaTeX syntax error occurs
-        logging.warning(f"[LATEX RENDER] Mathtext parse error: {e}. Falling back to plain text.")
+        fig.tight_layout(pad=0.2)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
+        buf.seek(0)
+        return buf
+    except Exception as parse_err:
+        logging.warning(f"[LATEX RENDER] Primary render error: {parse_err}. Switching to Unicode plain-text fallback.")
+
+        # Fail-safe plain text fallback
+        fallback_text = raw_cleaned
+        fallback_text = _re.sub(r'\\(?:frac|sqrt|left|right|begin|end|mathrm|mathbf|text)\b', '', fallback_text)
+        fallback_text = _re.sub(r'\\([a-zA-Z]+)', r'\1', fallback_text)
+        fallback_text = fallback_text.replace('{', '').replace('}', '').replace('$', '')
+        wrapped_fallback = _textwrap.fill(fallback_text, width=65)
+
+        fig = Figure(figsize=(8.0, 3.0), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.axis('off')
+
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('#4F545C')
+            spine.set_linewidth(0.5)
+
+        if title:
+            ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
+
         ax.text(
             0.5, 0.5,
-            formula_text,
+            wrapped_fallback,
             color='#5865F2',
-            fontsize=14,
+            fontsize=11,
             ha='center',
             va='center',
-            fontstyle='italic'
+            fontfamily='DejaVu Sans',
+            transform=ax.transAxes,
+            wrap=True
         )
-
-    ax.axis('off')
-
-    if title:
-        ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
-
-    fig.tight_layout()
-    buf = BytesIO()
-    fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.15)
-    buf.seek(0)
-    return buf
+        fig.tight_layout(pad=0.2)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
+        buf.seek(0)
+        return buf
 
 
 def generate_db_stats_chart(db_stats_data: dict, timeframe: str = "day") -> BytesIO:
