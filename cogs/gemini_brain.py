@@ -932,8 +932,11 @@ def clean_message_text(text: str) -> str:
 def strip_latex(text: str) -> str:
     """Convert LaTeX math notation to readable plain text / Unicode for Discord.
     Discord cannot render LaTeX, so we convert common patterns to readable equivalents."""
-    if not text or '$' not in text and '\\' not in text:
-        return text  # Fast path: no LaTeX detected
+    if not text:
+        return text
+    # Fast path: no LaTeX detected (no $, no backslash commands, no math delimiters)
+    if '$' not in text and '\\' not in text and '\\[' not in text:
+        return text
 
     # Greek letters -> Unicode
     _GREEK = {
@@ -1022,6 +1025,38 @@ def strip_latex(text: str) -> str:
     text = text.replace(r'\qquad', '  ').replace(r'\quad', ' ')
     # \, \; \: \! -> thin spaces or nothing
     text = re.sub(r'\\[,;:!]', ' ', text)
+
+    # --- LaTeX environments (\begin{...} / \end{...}) ---
+    text = re.sub(r'\\begin\{[^}]*\}', '', text)
+    text = re.sub(r'\\end\{[^}]*\}', '', text)
+
+    # --- \boxed{...} -> [...] ---
+    text = re.sub(r'\\boxed\{([^}]*)\}', r'[\1]', text)
+
+    # --- \overline{...} -> x̅ ---
+    text = re.sub(r'\\overline\{([^}]*)\}', r'\1̅', text)
+
+    # --- \underline{...} -> keep text ---
+    text = re.sub(r'\\underline\{([^}]*)\}', r'\1', text)
+
+    # --- \displaystyle, \textstyle, \limits -> nothing ---
+    text = re.sub(r'\\(?:display|text)style\b', '', text)
+    text = text.replace(r'\limits', '')
+
+    # --- Trig / math function commands -> plain text ---
+    _MATH_FUNCS = [
+        'log', 'ln', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot',
+        'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh',
+        'lim', 'max', 'min', 'sup', 'inf', 'det', 'exp', 'gcd',
+    ]
+    for func in _MATH_FUNCS:
+        text = text.replace(f'\\{func}', func)
+
+    # --- \binom{n}{k} -> C(n,k) ---
+    text = re.sub(r'\\binom\{([^}]*)\}\{([^}]*)\}', r'C(\1,\2)', text)
+
+    # --- \choose -> C notation (legacy LaTeX) ---
+    text = re.sub(r'\{([^}]*)\s*\\choose\s*([^}]*)\}', r'C(\1,\2)', text)
 
     # Strip display math delimiters: \[...\] and \(...\)
     text = text.replace(r'\[', '').replace(r'\]', '')

@@ -40,66 +40,341 @@ def _safe_field(text: str, limit: int = 1024) -> str:
 
 
 import re as _re
+import textwrap as _textwrap
 
-def _has_math(text: str) -> bool:
-    """Detect if text contains mathematical notation worth rendering as an image."""
+# ============================================================
+# READABILITY CHECKPOINT SYSTEM — Pre-Send Puzzle Validation
+# ============================================================
+
+# --- Detection Functions ---
+
+def _has_raw_latex(text: str) -> bool:
+    """Detect if text contains raw LaTeX that leaked through Gemini output."""
     if not text:
         return False
-    math_patterns = [
-        r'[²³⁴⁵⁶⁷⁸⁹⁰]',      # Unicode superscripts
-        r'[₀₁₂₃₄₅₆₇₈₉]',      # Unicode subscripts  
-        r'[αβγδεζηθικλμνξπρστυφχψω]',  # Greek letters
-        r'[√∑∏∫∂∇]',            # Math operators
-        r'[≤≥≠≈∞±×÷]',          # Math relations
-        r'\d+/\d+',             # Fractions like 3/4
+    latex_patterns = [
+        r'\\frac\{',           # \frac{...}{...}
+        r'\\sqrt\{',           # \sqrt{...}
+        r'\\begin\{',          # \begin{matrix}, \begin{align}
+        r'\\end\{',            # \end{...}
+        r'\$\$.+?\$\$',        # $$...$$
+        r'(?<!\w)\$.+?\$(?!\w)',  # $...$
+        r'\\\[.+?\\\]',        # \[...\]
+        r'\\\(.+?\\\)',        # \(...\)
+        r'\\(?:alpha|beta|gamma|delta|theta|sigma|omega|pi|lambda|mu|phi|psi|epsilon)\b',
+        r'\\(?:int|sum|prod|lim|log|ln|sin|cos|tan|sec|csc|cot)\b',
+        r'\\(?:left|right|cdot|times|div|pm|mp|leq|geq|neq|approx|infty)\b',
+        r'\\(?:mathbb|mathrm|mathbf|text|hat|vec|bar|tilde)\{',
     ]
-    for pattern in math_patterns:
-        if _re.search(pattern, text):
+    for pat in latex_patterns:
+        if _re.search(pat, text):
             return True
     return False
 
 
-def _render_puzzle_math(question: str, options: dict) -> 'BytesIO | None':
-    """If a puzzle has significant math content, render it as a dark-mode PNG image."""
-    full_text = question + ' ' + ' '.join(options.values())
-    if not _has_math(full_text):
-        return None
+def _has_math(text: str) -> bool:
+    """Detect if text contains mathematical notation (Unicode or raw LaTeX)."""
+    if not text:
+        return False
+    math_patterns = [
+        r'[²³⁴⁵⁶⁷⁸⁹⁰]',              # Unicode superscripts
+        r'[₀₁₂₃₄₅₆₇₈₉]',              # Unicode subscripts
+        r'[αβγδεζηθικλμνξπρστυφχψω]',  # Greek letters
+        r'[√∑∏∫∂∇]',                    # Math operators
+        r'[≤≥≠≈∞±×÷≡∝∈∉⊂⊃∪∩∀∃]',      # Math relations
+        r'\d+/\d+',                     # Fractions like 3/4
+        r'[⁺⁻⁼⁽⁾ⁿⁱ]',                 # Superscript operators
+        r'[₊₋₌₍₎]',                    # Subscript operators
+    ]
+    for pattern in math_patterns:
+        if _re.search(pattern, text):
+            return True
+    return _has_raw_latex(text)
+
+
+def _readability_score(text: str) -> int:
+    """Score text readability for Discord (0-100). Higher = more readable.
+    Checks for broken symbols, stray backslashes, unbalanced brackets, etc."""
+    if not text:
+        return 100
+    score = 100
+    
+    # Penalty for raw backslash commands (LaTeX leak)
+    raw_backslash_count = len(_re.findall(r'\\[a-zA-Z]{2,}', text))
+    score -= raw_backslash_count * 15
+    
+    # Penalty for stray curly braces (broken LaTeX cleanup)
+    brace_count = text.count('{') + text.count('}')
+    score -= brace_count * 5
+    
+    # Penalty for dollar signs (LaTeX delimiters)
+    dollar_count = text.count('$')
+    score -= dollar_count * 10
+    
+    # Penalty for very long lines without breaks (Discord wraps badly)
+    lines = text.split('\n')
+    for line in lines:
+        if len(line) > 120:
+            score -= 5
+    
+    # Penalty for double-encoded backslashes
+    double_backslash = text.count('\\\\')
+    score -= double_backslash * 8
+    
+    # Bonus for clean Unicode math (these render beautifully on Discord)
+    unicode_math = len(_re.findall(r'[αβγδεζηθικλμνξπρστυφχψω²³⁴⁵⁶⁷⁸⁹⁰√∑∏∫±×÷≤≥≠≈∞]', text))
+    score += min(unicode_math * 2, 20)  # Cap bonus at 20
+    
+    return max(0, min(100, score))
+
+
+# --- Sanitization Functions ---
+
+def _smart_sanitize(text: str) -> str:
+    """Multi-pass sanitization pipeline for maximum Discord readability.
+    Converts LaTeX → Unicode → clean text, handling edge cases."""
+    if not text:
+        return text
+    
+    # Pass 1: Run strip_latex (handles most common LaTeX → Unicode conversions)
+    text = strip_latex(text)
+    
+    # Pass 2: Handle edge cases strip_latex missed
+    
+    # Clean LaTeX environments that strip_latex doesn't handle
+    text = _re.sub(r'\\begin\{[^}]*\}', '', text)
+    text = _re.sub(r'\\end\{[^}]*\}', '', text)
+    
+    # Clean \boxed{...} → [...] 
+    text = _re.sub(r'\\boxed\{([^}]*)\}', r'[\1]', text)
+    
+    # Clean \overline{...} → x̅
+    text = _re.sub(r'\\overline\{([^}]*)\}', r'\1̅', text)
+    
+    # Clean \underline{...} → keep text
+    text = _re.sub(r'\\underline\{([^}]*)\}', r'\1', text)
+    
+    # Clean \displaystyle, \textstyle → nothing
+    text = _re.sub(r'\\(?:display|text)style\b', '', text)
+    
+    # Clean \limits → nothing
+    text = text.replace('\\limits', '')
+    
+    # Clean \log, \ln, \sin, \cos, etc. → plain text
+    trig_funcs = ['log', 'ln', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot',
+                  'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh',
+                  'lim', 'max', 'min', 'sup', 'inf', 'det', 'exp', 'gcd']
+    for func in trig_funcs:
+        text = text.replace(f'\\{func}', func)
+    
+    # Pass 3: Final cleanup
+    # Remove any remaining stray backslash commands
+    text = _re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    
+    # Clean stray curly braces
+    text = text.replace('{', '').replace('}', '')
+    
+    # Clean stray dollar signs
+    text = text.replace('$', '')
+    
+    # Normalize whitespace
+    text = _re.sub(r'  +', ' ', text)
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+
+
+# --- Rendering Functions ---
+
+def _render_puzzle_image(question: str, options: dict, title: str = "") -> 'BytesIO | None':
+    """Render puzzle question + options as a high-quality dark-mode PNG image.
+    Uses word-wrapping, proper spacing, and Discord-matching dark theme."""
     try:
         from io import BytesIO
         from matplotlib.figure import Figure
         
-        fig = Figure(figsize=(8, 3.5), dpi=180)
+        # Word-wrap question to ~55 chars per line for readability
+        wrapped_q = _textwrap.fill(question, width=55)
+        
+        # Build formatted display text
+        lines = [wrapped_q, '']
+        for key, val in options.items():
+            wrapped_opt = _textwrap.fill(f'{key}.  {val}', width=55, subsequent_indent='    ')
+            lines.append(wrapped_opt)
+        display_text = '\n'.join(lines)
+        
+        # Calculate dynamic figure height based on content
+        line_count = display_text.count('\n') + 1
+        fig_height = max(2.5, min(6.0, 0.35 * line_count + 0.8))
+        
+        fig = Figure(figsize=(8, fig_height), dpi=180)
         fig.patch.set_facecolor('#2B2D31')
         ax = fig.subplots()
         ax.set_facecolor('#1E1F22')
         ax.axis('off')
         
-        # Build formatted text
-        lines = [question, '']
-        for key, val in options.items():
-            lines.append(f'{key}.  {val}')
-        display_text = '\n'.join(lines)
+        # Add subtle border
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('#4F545C')
+            spine.set_linewidth(0.5)
         
+        # Title bar if provided
+        y_start = 0.95
+        if title:
+            ax.text(
+                0.05, 0.98, title,
+                color='#5865F2', fontsize=9, fontweight='bold',
+                ha='left', va='top', transform=ax.transAxes
+            )
+            y_start = 0.92
+        
+        # Main content
         ax.text(
-            0.05, 0.95,
+            0.05, y_start,
             display_text,
-            color='white',
-            fontsize=11,
+            color='#DCDDDE',
+            fontsize=10.5,
             ha='left',
             va='top',
-            fontfamily='monospace',
+            fontfamily='DejaVu Sans',
+            transform=ax.transAxes,
+            linespacing=1.7,
+            wrap=False
+        )
+        
+        fig.tight_layout(pad=0.3)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.25)
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        logging.warning(f"[PUZZLE IMAGE RENDER] Failed: {e}")
+        return None
+
+
+def _render_explanation_image(explanation: str) -> 'BytesIO | None':
+    """Render puzzle explanation as a dark-mode PNG for complex math explanations."""
+    try:
+        from io import BytesIO
+        from matplotlib.figure import Figure
+        
+        wrapped = _textwrap.fill(explanation, width=65)
+        line_count = wrapped.count('\n') + 1
+        fig_height = max(2.0, min(8.0, 0.32 * line_count + 0.6))
+        
+        fig = Figure(figsize=(8.5, fig_height), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.axis('off')
+        
+        ax.text(
+            0.04, 0.96,
+            wrapped,
+            color='#DCDDDE',
+            fontsize=10,
+            ha='left',
+            va='top',
+            fontfamily='DejaVu Sans',
             transform=ax.transAxes,
             linespacing=1.6
         )
         
-        fig.tight_layout()
+        fig.tight_layout(pad=0.2)
         buf = BytesIO()
         fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
         buf.seek(0)
         return buf
     except Exception as e:
-        logging.warning(f"[PUZZLE MATH RENDER] Failed: {e}")
+        logging.warning(f"[EXPLANATION IMAGE RENDER] Failed: {e}")
         return None
+
+
+# --- Master Checkpoint ---
+
+def _readability_checkpoint(puzzle: dict) -> dict:
+    """Master pre-send readability checkpoint for puzzles.
+    
+    Runs multi-stage checks on question, options, and explanation:
+    1. Detect raw LaTeX leaks from Gemini output
+    2. Smart-sanitize all text fields
+    3. Score readability for Discord
+    4. Decision: text-only embed vs image render
+    5. Render dark-mode images for complex math
+    
+    Returns dict with:
+        question_text: sanitized question for embed text
+        options_text: sanitized options dict for embed text
+        explanation_text: sanitized explanation
+        question_image: BytesIO image or None (for question+options)
+        explanation_image: BytesIO image or None
+        use_image: bool (whether to attach the question image)
+        use_explanation_image: bool
+        readability_score: int 0-100
+        had_latex_leak: bool
+    """
+    question = puzzle.get('question', '')
+    options = puzzle.get('options', {})
+    explanation = puzzle.get('explanation', '')
+    
+    # --- Stage 1: Detect LaTeX leaks ---
+    had_latex_leak = (
+        _has_raw_latex(question) or
+        any(_has_raw_latex(v) for v in options.values()) or
+        _has_raw_latex(explanation)
+    )
+    
+    if had_latex_leak:
+        logging.warning(f"[READABILITY] LaTeX leak detected in puzzle! Running deep sanitization.")
+    
+    # --- Stage 2: Smart-sanitize all text ---
+    clean_question = _smart_sanitize(question)
+    clean_options = {k: _smart_sanitize(v) for k, v in options.items()}
+    clean_explanation = _smart_sanitize(explanation)
+    
+    # --- Stage 3: Score readability ---
+    full_text = clean_question + ' ' + ' '.join(clean_options.values())
+    score = _readability_score(full_text)
+    explanation_score = _readability_score(clean_explanation)
+    
+    logging.info(f"[READABILITY] Question score: {score}/100, Explanation score: {explanation_score}/100, LaTeX leak: {had_latex_leak}")
+    
+    # --- Stage 4: Decision logic ---
+    has_math_content = _has_math(full_text)
+    use_image = False
+    use_explanation_image = False
+    question_image = None
+    explanation_image = None
+    
+    # Render question as image if:
+    # - Readability score is low (< 70) after sanitization
+    # - OR text had LaTeX leaks (might still look bad)
+    # - OR text has significant math content that benefits from proper rendering
+    if score < 70 or (had_latex_leak and score < 85) or (has_math_content and score < 80):
+        question_image = _render_puzzle_image(clean_question, clean_options, "📐 Mathematical Puzzle")
+        if question_image:
+            use_image = True
+            logging.info(f"[READABILITY] Rendering question as image (score={score}, math={has_math_content})")
+    
+    # Render explanation as image if it has complex math
+    if explanation_score < 65 or (_has_math(clean_explanation) and explanation_score < 75):
+        explanation_image = _render_explanation_image(clean_explanation)
+        if explanation_image:
+            use_explanation_image = True
+            logging.info(f"[READABILITY] Rendering explanation as image (score={explanation_score})")
+    
+    return {
+        'question_text': clean_question,
+        'options_text': clean_options,
+        'explanation_text': clean_explanation,
+        'question_image': question_image,
+        'explanation_image': explanation_image,
+        'use_image': use_image,
+        'use_explanation_image': use_explanation_image,
+        'readability_score': score,
+        'had_latex_leak': had_latex_leak,
+    }
 
 
 # ============================================================
@@ -173,13 +448,29 @@ class PuzzleAnswerView(discord.ui.View):
                 except Exception as e:
                     logging.warning(f"[PUZZLE] Could not add solved role: {e}")
 
+            # Sanitize explanation for Discord readability
+            clean_explanation = _smart_sanitize(explanation)
+            desc = f"You answered **{chosen}** — that's right!\n\n📖 **Explanation:**\n{clean_explanation}"
+            if len(desc) > 4096:
+                desc = desc[:4093] + "..."
+
             embed = discord.Embed(
                 title="🎉 Correct! Well Done!",
-                description=f"You answered **{chosen}** — that's right!\n\n📖 **Explanation:**\n{explanation}",
+                description=desc,
                 color=0x57F287,
             )
             embed.set_footer(text=f"YPT Study Bot • Puzzle of the Day • {today_str}")
-            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Render explanation as image if it has complex math
+            exp_img = None
+            if _has_math(clean_explanation) and _readability_score(clean_explanation) < 75:
+                exp_img = _render_explanation_image(clean_explanation)
+            if exp_img:
+                exp_file = discord.File(exp_img, filename='explanation.png')
+                embed.set_image(url='attachment://explanation.png')
+                await interaction.followup.send(embed=embed, file=exp_file, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
             logging.info(f"[PUZZLE] {interaction.user.display_name} solved today's puzzle")
             return
 
@@ -276,13 +567,29 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
 
         if _reply[0] == "correct":
             explanation = _reply[1]
+            # Sanitize explanation for Discord readability
+            clean_explanation = _smart_sanitize(explanation)
+            desc = f"You answered **{chosen}** — that's correct!\n\n📖 **Explanation:**\n{clean_explanation}"
+            if len(desc) > 4096:
+                desc = desc[:4093] + "..."
+
             embed = discord.Embed(
                 title="🧠 Outstanding! Weekly Mega Puzzle Solved!",
-                description=f"You answered **{chosen}** — that's correct!\n\n📖 **Explanation:**\n{explanation}",
+                description=desc,
                 color=0x2ECC71,
             )
             embed.set_footer(text="YPT Study Bot • Weekly Mega Puzzle • solved")
-            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Render explanation as image if it has complex math
+            exp_img = None
+            if _has_math(clean_explanation) and _readability_score(clean_explanation) < 75:
+                exp_img = _render_explanation_image(clean_explanation)
+            if exp_img:
+                exp_file = discord.File(exp_img, filename='explanation.png')
+                embed.set_image(url='attachment://explanation.png')
+                await interaction.followup.send(embed=embed, file=exp_file, ephemeral=True)
+            else:
+                await interaction.followup.send(embed=embed, ephemeral=True)
             logging.info(f"[PUZZLE] {interaction.user.display_name} solved the weekly mega puzzle")
             return
 
@@ -440,10 +747,12 @@ class PuzzleCog(commands.Cog):
             if channel is None:
                 channel = await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
 
-            opts = puzzle["options"]
+            # ── READABILITY CHECKPOINT ──
+            checkpoint = _readability_checkpoint(puzzle)
+            opts = checkpoint['options_text']
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
 
-            desc_text = strip_latex(f"**{puzzle['question']}**\n\n{options_str}")
+            desc_text = f"**{checkpoint['question_text']}**\n\n{options_str}"
             if len(desc_text) > 4096:
                 desc_text = desc_text[:4093] + "..."
 
@@ -453,11 +762,10 @@ class PuzzleCog(commands.Cog):
                 color=0x5865F2,
             )
 
-            # Render math as dark-mode image if puzzle contains equations
-            math_img = _render_puzzle_math(puzzle['question'], opts)
+            # Attach math image if checkpoint decided it's needed
             puzzle_file = None
-            if math_img:
-                puzzle_file = discord.File(math_img, filename='puzzle_math.png')
+            if checkpoint['use_image'] and checkpoint['question_image']:
+                puzzle_file = discord.File(checkpoint['question_image'], filename='puzzle_math.png')
                 embed.set_image(url='attachment://puzzle_math.png')
 
             embed.add_field(
@@ -476,7 +784,14 @@ class PuzzleCog(commands.Cog):
                 "\U0001f9e9 **Daily Puzzle is in your DMs!** Check your DMs and solve it before midnight or get kicked."
             )
 
+            # ── SEND-VERIFICATION CHECKPOINT ──
+            if not alert_msg or not alert_msg.id:
+                logging.error("[PUZZLE] SEND-VERIFY FAILED: Channel alert message was not posted!")
+                return False
+            logging.info(f"[PUZZLE] SEND-VERIFY: Channel alert posted (msg_id={alert_msg.id})")
+
             dm_count = 0
+            dm_fail_count = 0
             view = PuzzleAnswerView(self)
             for member in channel.guild.members:
                 if member.bot:
@@ -490,11 +805,25 @@ class PuzzleCog(commands.Cog):
                     dm_count += 1
                     await asyncio.sleep(0.5)
                 except discord.Forbidden:
-                    pass
+                    dm_fail_count += 1
                 except Exception as dm_err:
+                    dm_fail_count += 1
                     logging.warning(f"[PUZZLE] Could not DM puzzle to {member.display_name}: {dm_err}")
 
-            logging.info(f"[PUZZLE] DMed today's puzzle to {dm_count} members")
+            # ── DM DELIVERY VERIFICATION ──
+            total_attempted = dm_count + dm_fail_count
+            if total_attempted > 0:
+                success_rate = (dm_count / total_attempted) * 100
+            else:
+                success_rate = 0.0
+            logging.info(
+                f"[PUZZLE] SEND-VERIFY: DMs delivered={dm_count}, failed={dm_fail_count}, "
+                f"success_rate={success_rate:.0f}%, readability_score={checkpoint['readability_score']}/100, "
+                f"latex_leak={checkpoint['had_latex_leak']}, image_rendered={checkpoint['use_image']}"
+            )
+
+            if dm_count == 0 and total_attempted > 0:
+                logging.warning("[PUZZLE] SEND-VERIFY WARNING: No DMs delivered! All members may have DMs disabled.")
 
             async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
@@ -513,12 +842,21 @@ class PuzzleCog(commands.Cog):
                     "explanation": puzzle["explanation"],
                     "solved_users": [],
                     "message_id": alert_msg.id,
+                    "readability_score": checkpoint['readability_score'],
+                    "had_latex_leak": checkpoint['had_latex_leak'],
+                    "used_image": checkpoint['use_image'],
+                    "dm_delivered": dm_count,
+                    "dm_failed": dm_fail_count,
                 }
                 data.setdefault("meta", {}).setdefault("puzzle_loop_state", {})["posted_date"] = today_str
                 self._today_puzzle_posted = today_str
                 await self.bot.save_data(data)
 
-            logging.info(f"[PUZZLE] Posted daily puzzle for {today_str}")
+            # ── FINAL VERIFICATION ──
+            logging.info(
+                f"[PUZZLE] SEND-VERIFY COMPLETE: Daily puzzle for {today_str} posted, "
+                f"msg_id={alert_msg.id}, {dm_count} DMs sent, score={checkpoint['readability_score']}/100"
+            )
             return True
 
         except Exception as e:
@@ -567,10 +905,12 @@ class PuzzleCog(commands.Cog):
             if not channel:
                 raise ValueError("Puzzle channel not found")
 
-            opts = puzzle["options"]
+            # ── READABILITY CHECKPOINT ──
+            checkpoint = _readability_checkpoint(puzzle)
+            opts = checkpoint['options_text']
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
 
-            desc_text = strip_latex(f"**{puzzle['question']}**\n\n{options_str}")
+            desc_text = f"**{checkpoint['question_text']}**\n\n{options_str}"
             if len(desc_text) > 4096:
                 desc_text = desc_text[:4093] + "..."
 
@@ -580,11 +920,10 @@ class PuzzleCog(commands.Cog):
                 color=0x9B59B6,
             )
 
-            # Render math as dark-mode image if puzzle contains equations
-            math_img = _render_puzzle_math(puzzle['question'], opts)
+            # Attach math image if checkpoint decided it's needed
             puzzle_file = None
-            if math_img:
-                puzzle_file = discord.File(math_img, filename='puzzle_math.png')
+            if checkpoint['use_image'] and checkpoint['question_image']:
+                puzzle_file = discord.File(checkpoint['question_image'], filename='puzzle_math.png')
                 embed.set_image(url='attachment://puzzle_math.png')
 
             embed.add_field(
@@ -610,6 +949,16 @@ class PuzzleCog(commands.Cog):
                 send_kwargs["file"] = puzzle_file
                 
             msg = await channel.send(**send_kwargs)
+
+            # ── SEND-VERIFICATION CHECKPOINT ──
+            if not msg or not msg.id:
+                logging.error("[PUZZLE] SEND-VERIFY FAILED: Weekly puzzle channel message was not posted!")
+                return False
+            logging.info(
+                f"[PUZZLE] SEND-VERIFY: Weekly puzzle posted (msg_id={msg.id}), "
+                f"readability_score={checkpoint['readability_score']}/100, "
+                f"latex_leak={checkpoint['had_latex_leak']}, image_rendered={checkpoint['use_image']}"
+            )
 
             async with self.bot.db_write_lock:
                 data = await self.bot.load_data()
@@ -637,10 +986,17 @@ class PuzzleCog(commands.Cog):
                 active["posted_at"] = datetime.datetime.now(datetime.timezone.utc).timestamp()
                 active["message_id"] = msg.id
                 active["week_start_date"] = expected_start_str
+                active["readability_score"] = checkpoint['readability_score']
+                active["had_latex_leak"] = checkpoint['had_latex_leak']
+                active["used_image"] = checkpoint['use_image']
 
                 await self.bot.save_data(data)
 
-            logging.info(f"[PUZZLE] Posted weekly puzzle for {expected_start_str}")
+            # ── FINAL VERIFICATION ──
+            logging.info(
+                f"[PUZZLE] SEND-VERIFY COMPLETE: Weekly puzzle for {expected_start_str} posted, "
+                f"msg_id={msg.id}, score={checkpoint['readability_score']}/100"
+            )
             return True
 
         except Exception as e:
