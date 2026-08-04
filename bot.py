@@ -3676,6 +3676,30 @@ async def tex_command(interaction: discord.Interaction, formula: str):
         await interaction.followup.send(f"❌ Error rendering formula: {e}", ephemeral=True)
 
 
+@bot.tree.command(name='chem', description='Render organic chemistry structures, reactions & formulas as images')
+@app_commands.describe(
+    molecule='Molecule name (benzene, ethanol), formula (CH₃COOH), or reaction (A → B)',
+    title='Optional title for the image'
+)
+async def chem_command(interaction: discord.Interaction, molecule: str, title: str = "Organic Chemistry"):
+    """Renders organic chemistry structures as high-res dark-mode PNG images."""
+    await interaction.response.defer()
+    try:
+        from utils import render_chemistry_image
+        loop = asyncio.get_running_loop()
+        img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
+        file = discord.File(img_buf, filename="molecule.png")
+        embed = discord.Embed(
+            title="🧪 Chemistry Render",
+            color=0x00D166
+        )
+        embed.set_image(url="attachment://molecule.png")
+        embed.set_footer(text=f"Input: {molecule[:100]}")
+        await interaction.followup.send(embed=embed, file=file)
+    except Exception as e:
+        logging.error(f"Error in /chem: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error rendering molecule: {e}", ephemeral=True)
+
 @bot.tree.command(name='checkin', description='Check in with your study plan for today')
 @app_commands.describe(plan='What are you planning to study today?')
 async def checkin_command(interaction: discord.Interaction, plan: str):

@@ -525,6 +525,414 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
         return buf
 
 
+# ============================================================
+# ORGANIC CHEMISTRY RENDERER
+# ============================================================
+
+# Common molecule database: name -> (SMILES-like structure def, display_name, functional_groups)
+_MOLECULE_DB = {
+    # Hydrocarbons
+    'methane': {'formula': 'CH₄', 'type': 'alkane', 'carbons': 1, 'name': 'Methane'},
+    'ethane': {'formula': 'C₂H₆', 'type': 'alkane', 'carbons': 2, 'name': 'Ethane'},
+    'propane': {'formula': 'C₃H₈', 'type': 'alkane', 'carbons': 3, 'name': 'Propane'},
+    'butane': {'formula': 'C₄H₁₀', 'type': 'alkane', 'carbons': 4, 'name': 'Butane'},
+    'pentane': {'formula': 'C₅H₁₂', 'type': 'alkane', 'carbons': 5, 'name': 'Pentane'},
+    'hexane': {'formula': 'C₆H₁₄', 'type': 'alkane', 'carbons': 6, 'name': 'Hexane'},
+    'ethylene': {'formula': 'C₂H₄', 'type': 'alkene', 'carbons': 2, 'name': 'Ethylene (Ethene)'},
+    'propylene': {'formula': 'C₃H₆', 'type': 'alkene', 'carbons': 3, 'name': 'Propylene (Propene)'},
+    'ethene': {'formula': 'C₂H₄', 'type': 'alkene', 'carbons': 2, 'name': 'Ethene'},
+    'propene': {'formula': 'C₃H₆', 'type': 'alkene', 'carbons': 3, 'name': 'Propene'},
+    'acetylene': {'formula': 'C₂H₂', 'type': 'alkyne', 'carbons': 2, 'name': 'Acetylene (Ethyne)'},
+    'ethyne': {'formula': 'C₂H₂', 'type': 'alkyne', 'carbons': 2, 'name': 'Ethyne'},
+    # Aromatics
+    'benzene': {'formula': 'C₆H₆', 'type': 'aromatic', 'carbons': 6, 'name': 'Benzene'},
+    'toluene': {'formula': 'C₇H₈', 'type': 'aromatic', 'carbons': 7, 'name': 'Toluene', 'substituents': ['CH₃']},
+    'phenol': {'formula': 'C₆H₅OH', 'type': 'aromatic', 'carbons': 6, 'name': 'Phenol', 'substituents': ['OH']},
+    'aniline': {'formula': 'C₆H₅NH₂', 'type': 'aromatic', 'carbons': 6, 'name': 'Aniline', 'substituents': ['NH₂']},
+    'nitrobenzene': {'formula': 'C₆H₅NO₂', 'type': 'aromatic', 'carbons': 6, 'name': 'Nitrobenzene', 'substituents': ['NO₂']},
+    'styrene': {'formula': 'C₈H₈', 'type': 'aromatic', 'carbons': 8, 'name': 'Styrene', 'substituents': ['CH=CH₂']},
+    'naphthalene': {'formula': 'C₁₀H₈', 'type': 'fused_aromatic', 'carbons': 10, 'name': 'Naphthalene'},
+    # Alcohols & Ethers
+    'methanol': {'formula': 'CH₃OH', 'type': 'alcohol', 'carbons': 1, 'name': 'Methanol'},
+    'ethanol': {'formula': 'C₂H₅OH', 'type': 'alcohol', 'carbons': 2, 'name': 'Ethanol'},
+    'propanol': {'formula': 'C₃H₇OH', 'type': 'alcohol', 'carbons': 3, 'name': 'Propanol'},
+    'glycerol': {'formula': 'C₃H₅(OH)₃', 'type': 'polyol', 'carbons': 3, 'name': 'Glycerol'},
+    # Aldehydes & Ketones
+    'formaldehyde': {'formula': 'HCHO', 'type': 'aldehyde', 'carbons': 1, 'name': 'Formaldehyde'},
+    'acetaldehyde': {'formula': 'CH₃CHO', 'type': 'aldehyde', 'carbons': 2, 'name': 'Acetaldehyde'},
+    'acetone': {'formula': '(CH₃)₂CO', 'type': 'ketone', 'carbons': 3, 'name': 'Acetone'},
+    # Carboxylic Acids
+    'formic acid': {'formula': 'HCOOH', 'type': 'carboxylic', 'carbons': 1, 'name': 'Formic Acid'},
+    'acetic acid': {'formula': 'CH₃COOH', 'type': 'carboxylic', 'carbons': 2, 'name': 'Acetic Acid'},
+    'oxalic acid': {'formula': '(COOH)₂', 'type': 'dicarboxylic', 'carbons': 2, 'name': 'Oxalic Acid'},
+    'benzoic acid': {'formula': 'C₆H₅COOH', 'type': 'aromatic_acid', 'carbons': 7, 'name': 'Benzoic Acid'},
+    # Esters & Amides
+    'ethyl acetate': {'formula': 'CH₃COOC₂H₅', 'type': 'ester', 'carbons': 4, 'name': 'Ethyl Acetate'},
+    'aspirin': {'formula': 'C₉H₈O₄', 'type': 'aromatic_ester', 'carbons': 9, 'name': 'Aspirin (Acetylsalicylic Acid)'},
+    # Amines
+    'methylamine': {'formula': 'CH₃NH₂', 'type': 'amine', 'carbons': 1, 'name': 'Methylamine'},
+    'ethylamine': {'formula': 'C₂H₅NH₂', 'type': 'amine', 'carbons': 2, 'name': 'Ethylamine'},
+    # Sugars
+    'glucose': {'formula': 'C₆H₁₂O₆', 'type': 'sugar', 'carbons': 6, 'name': 'Glucose'},
+    'fructose': {'formula': 'C₆H₁₂O₆', 'type': 'sugar', 'carbons': 6, 'name': 'Fructose'},
+    'sucrose': {'formula': 'C₁₂H₂₂O₁₁', 'type': 'disaccharide', 'carbons': 12, 'name': 'Sucrose'},
+    # Amino Acids
+    'glycine': {'formula': 'NH₂CH₂COOH', 'type': 'amino_acid', 'carbons': 2, 'name': 'Glycine'},
+    'alanine': {'formula': 'CH₃CH(NH₂)COOH', 'type': 'amino_acid', 'carbons': 3, 'name': 'Alanine'},
+}
+
+import math as _math
+
+def _draw_benzene_ring(ax, cx, cy, size=0.8, color='white', linewidth=2.0):
+    """Draw a benzene ring (hexagon with inscribed circle) at position (cx, cy)."""
+    angles = [_math.pi / 6 + i * _math.pi / 3 for i in range(6)]
+    xs = [cx + size * _math.cos(a) for a in angles]
+    ys = [cy + size * _math.sin(a) for a in angles]
+    # Outer hexagon
+    xs_closed = xs + [xs[0]]
+    ys_closed = ys + [ys[0]]
+    ax.plot(xs_closed, ys_closed, color=color, linewidth=linewidth, solid_capstyle='round')
+    # Inner circle (aromatic)
+    inner = _math.cos(_math.pi / 6) * size * 0.6
+    circle = __import__('matplotlib').patches.Circle((cx, cy), inner, fill=False,
+                                                      edgecolor=color, linewidth=linewidth * 0.6,
+                                                      linestyle='--', alpha=0.7)
+    ax.add_patch(circle)
+    return list(zip(xs, ys))
+
+
+def _draw_chain(ax, start_x, start_y, num_carbons, bond_type='single',
+                color='white', linewidth=2.0, angle_deg=30):
+    """Draw a zigzag carbon chain starting at (start_x, start_y)."""
+    bond_len = 0.9
+    points = [(start_x, start_y)]
+    for i in range(num_carbons - 1):
+        angle = _math.radians(angle_deg if i % 2 == 0 else -angle_deg)
+        dx = bond_len * _math.cos(angle)
+        dy = bond_len * _math.sin(angle)
+        new_x = points[-1][0] + dx
+        new_y = points[-1][1] + dy
+        points.append((new_x, new_y))
+
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        if bond_type == 'double' and i == 0:
+            offset = 0.06
+            ax.plot([x1, x2], [y1 + offset, y2 + offset], color=color, linewidth=linewidth, solid_capstyle='round')
+            ax.plot([x1, x2], [y1 - offset, y2 - offset], color=color, linewidth=linewidth, solid_capstyle='round')
+        elif bond_type == 'triple' and i == 0:
+            ax.plot([x1, x2], [y1, y2], color=color, linewidth=linewidth, solid_capstyle='round')
+            ax.plot([x1, x2], [y1 + 0.08, y2 + 0.08], color=color, linewidth=linewidth * 0.7, solid_capstyle='round')
+            ax.plot([x1, x2], [y1 - 0.08, y2 - 0.08], color=color, linewidth=linewidth * 0.7, solid_capstyle='round')
+        else:
+            ax.plot([x1, x2], [y1, y2], color=color, linewidth=linewidth, solid_capstyle='round')
+
+    return points
+
+
+def _draw_functional_group(ax, x, y, group, color='#5865F2', fontsize=11):
+    """Draw a functional group label at position (x, y)."""
+    ax.text(x, y, group, color=color, fontsize=fontsize, fontweight='bold',
+            ha='center', va='center',
+            bbox=dict(boxstyle='round,pad=0.15', facecolor='#1E1F22', edgecolor=color, alpha=0.9))
+
+
+def _draw_reaction_arrow(ax, x1, y1, x2, y2, color='#5865F2', linewidth=2.0,
+                          label='', reversible=False):
+    """Draw a reaction arrow from (x1,y1) to (x2,y2)."""
+    ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle='->' if not reversible else '<->',
+                                color=color, lw=linewidth,
+                                connectionstyle='arc3,rad=0'))
+    if label:
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2 + 0.15
+        ax.text(mid_x, mid_y, label, color=color, fontsize=9,
+                ha='center', va='bottom', fontstyle='italic')
+
+
+def render_chemistry_image(input_text: str, title: str = "Organic Chemistry") -> BytesIO:
+    """
+    Renders organic chemistry structures, reactions, and formulas as
+    crisp dark-mode PNG images for Discord.
+
+    Supports:
+    - Molecule names: "benzene", "ethanol", "aspirin", etc.
+    - Chemical equations: "CH3OH + O2 -> CO2 + H2O"
+    - Reaction notation with arrows: "A → B", "A ⇌ B"
+    - Raw structural formulas: "CH3-CH2-OH"
+    - Functional group display
+
+    Uses pure matplotlib — no RDKit or external chemistry libraries needed.
+    """
+    import re as _re
+    import textwrap as _textwrap
+
+    input_clean = input_text.strip().lower()
+
+    # Check if it's a known molecule name
+    mol_info = _MOLECULE_DB.get(input_clean)
+
+    # Also try without common suffixes
+    if not mol_info:
+        for key in _MOLECULE_DB:
+            if key in input_clean or input_clean in key:
+                mol_info = _MOLECULE_DB[key]
+                break
+
+    # Detect if it's a reaction (has arrow characters)
+    is_reaction = any(arrow in input_text for arrow in ['→', '⇌', '->', '<=>', '=>', '—>'])
+
+    try:
+        fig = Figure(figsize=(9, 5), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.set_aspect('equal')
+        ax.axis('off')
+
+        # Border
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('#4F545C')
+            spine.set_linewidth(0.5)
+
+        if title:
+            ax.text(0.5, 0.98, title, color='#5865F2', fontsize=10,
+                    fontweight='bold', ha='center', va='top', transform=ax.transAxes)
+
+        if mol_info:
+            # --- MOLECULE RENDERING MODE ---
+            mol_type = mol_info.get('type', 'alkane')
+            mol_name = mol_info.get('name', input_text)
+            mol_formula = mol_info.get('formula', '')
+            substituents = mol_info.get('substituents', [])
+            num_c = mol_info.get('carbons', 2)
+
+            if mol_type in ('aromatic', 'aromatic_acid', 'aromatic_ester'):
+                # Draw benzene ring
+                vertices = _draw_benzene_ring(ax, 0, 0, size=1.0, color='white', linewidth=2.0)
+                # Draw substituents
+                if substituents:
+                    # Top vertex
+                    vx, vy = vertices[1]
+                    ax.plot([vx, vx], [vy, vy + 0.6], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, vx, vy + 0.85, substituents[0],
+                                            color='#00D166', fontsize=12)
+                if mol_type == 'aromatic_acid':
+                    vx, vy = vertices[1]
+                    ax.plot([vx, vx], [vy, vy + 0.6], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, vx, vy + 0.85, 'COOH',
+                                            color='#ED4245', fontsize=12)
+
+                ax.set_xlim(-2.5, 2.5)
+                ax.set_ylim(-2.5, 2.8)
+
+            elif mol_type == 'fused_aromatic':
+                # Naphthalene — two fused benzene rings
+                v1 = _draw_benzene_ring(ax, -0.87, 0, size=1.0, color='white', linewidth=2.0)
+                v2 = _draw_benzene_ring(ax, 0.87, 0, size=1.0, color='white', linewidth=2.0)
+                ax.set_xlim(-3, 3)
+                ax.set_ylim(-2.5, 2.5)
+
+            elif mol_type in ('alkane', 'alcohol', 'aldehyde', 'ketone', 'carboxylic',
+                              'ester', 'amine', 'ether'):
+                # Draw zigzag chain
+                start_x = -num_c * 0.45
+                points = _draw_chain(ax, start_x, 0, num_c, bond_type='single',
+                                      color='white', linewidth=2.0)
+                # Draw carbon labels at each vertex
+                for i, (px, py) in enumerate(points):
+                    ax.text(px, py - 0.2, f'C{i+1}' if num_c <= 6 else '',
+                            color='#72767D', fontsize=7, ha='center', va='top')
+
+                # Functional group at end
+                last_x, last_y = points[-1]
+                if mol_type == 'alcohol':
+                    ax.plot([last_x, last_x + 0.5], [last_y, last_y], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, last_x + 0.9, last_y, 'OH',
+                                            color='#ED4245', fontsize=13)
+                elif mol_type == 'aldehyde':
+                    ax.plot([last_x, last_x + 0.5], [last_y, last_y], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, last_x + 0.9, last_y, 'CHO',
+                                            color='#FEE75C', fontsize=13)
+                elif mol_type == 'ketone':
+                    mid = len(points) // 2
+                    mx, my = points[mid]
+                    ax.plot([mx, mx], [my, my + 0.5], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, mx, my + 0.8, 'C=O',
+                                            color='#FEE75C', fontsize=13)
+                elif mol_type == 'carboxylic':
+                    ax.plot([last_x, last_x + 0.5], [last_y, last_y], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, last_x + 1.0, last_y, 'COOH',
+                                            color='#ED4245', fontsize=13)
+                elif mol_type == 'amine':
+                    ax.plot([last_x, last_x + 0.5], [last_y, last_y], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, last_x + 0.9, last_y, 'NH₂',
+                                            color='#5865F2', fontsize=13)
+                elif mol_type == 'ester':
+                    ax.plot([last_x, last_x + 0.5], [last_y, last_y], color='white', linewidth=2.0)
+                    _draw_functional_group(ax, last_x + 1.1, last_y, 'COO—R',
+                                            color='#EB459E', fontsize=12)
+
+                # Add H atoms to terminal carbons
+                first_x, first_y = points[0]
+                ax.text(first_x - 0.3, first_y + 0.25, 'H', color='#72767D',
+                        fontsize=8, ha='center', va='center')
+
+                pad = max(2.5, num_c * 0.6)
+                ax.set_xlim(start_x - 1.5, last_x + 2.5)
+                ax.set_ylim(-pad, pad)
+
+            elif mol_type in ('alkene',):
+                start_x = -num_c * 0.45
+                points = _draw_chain(ax, start_x, 0, num_c, bond_type='double',
+                                      color='white', linewidth=2.0)
+                last_x, last_y = points[-1]
+                ax.set_xlim(start_x - 1, last_x + 1)
+                ax.set_ylim(-2.5, 2.5)
+
+            elif mol_type in ('alkyne',):
+                start_x = -num_c * 0.45
+                points = _draw_chain(ax, start_x, 0, num_c, bond_type='triple',
+                                      color='white', linewidth=2.0)
+                last_x, last_y = points[-1]
+                ax.set_xlim(start_x - 1, last_x + 1)
+                ax.set_ylim(-2.5, 2.5)
+
+            elif mol_type in ('amino_acid',):
+                # Draw amino acid backbone: H2N—CH(R)—COOH
+                ax.plot([-1.5, -0.5], [0, 0], color='white', linewidth=2.0)
+                _draw_functional_group(ax, -2.0, 0, 'H₂N', color='#5865F2', fontsize=13)
+                ax.plot([-0.5, 0.5], [0, 0], color='white', linewidth=2.0)
+                ax.text(0, 0.15, 'Cα', color='#B5BAC1', fontsize=10,
+                        fontweight='bold', ha='center', va='bottom')
+                # R group
+                ax.plot([0, 0], [0, -0.6], color='white', linewidth=2.0)
+                r_label = 'H' if 'glycine' in input_clean else 'CH₃' if 'alanine' in input_clean else 'R'
+                _draw_functional_group(ax, 0, -0.9, r_label, color='#00D166', fontsize=12)
+                # COOH
+                ax.plot([0.5, 1.5], [0, 0], color='white', linewidth=2.0)
+                _draw_functional_group(ax, 2.0, 0, 'COOH', color='#ED4245', fontsize=13)
+                ax.set_xlim(-3, 3.5)
+                ax.set_ylim(-2.5, 2.5)
+
+            elif mol_type in ('sugar', 'disaccharide', 'polyol'):
+                # Draw Haworth-style ring (simplified pyranose)
+                ring_angles = [_math.pi / 5 + i * 2 * _math.pi / 5 for i in range(5)]
+                rxs = [1.2 * _math.cos(a) for a in ring_angles]
+                rys = [1.2 * _math.sin(a) for a in ring_angles]
+                # Close the ring with oxygen bridge
+                rxs_closed = rxs + [rxs[0]]
+                rys_closed = rys + [rys[0]]
+                ax.plot(rxs_closed, rys_closed, color='white', linewidth=2.0)
+                # Mark oxygen
+                ax.text(rxs[0] + 0.15, rys[0] + 0.15, 'O', color='#ED4245',
+                        fontsize=12, fontweight='bold', ha='center', va='center')
+                # OH groups
+                for i in range(1, 5):
+                    direction = 1 if i % 2 == 0 else -1
+                    ax.plot([rxs[i], rxs[i]], [rys[i], rys[i] + direction * 0.5],
+                            color='white', linewidth=1.5)
+                    _draw_functional_group(ax, rxs[i], rys[i] + direction * 0.75, 'OH',
+                                            color='#ED4245', fontsize=8)
+                ax.set_xlim(-3, 3)
+                ax.set_ylim(-3, 3)
+            else:
+                # Generic: just show formula
+                ax.text(0.5, 0.5, mol_formula, color='white', fontsize=24,
+                        fontweight='bold', ha='center', va='center', transform=ax.transAxes)
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+
+            # Name and formula labels
+            ax.text(0.5, 0.06, f'{mol_name}', color='#B5BAC1', fontsize=11,
+                    fontweight='bold', ha='center', va='bottom', transform=ax.transAxes)
+            ax.text(0.5, 0.01, f'{mol_formula}', color='#72767D', fontsize=9,
+                    ha='center', va='bottom', transform=ax.transAxes)
+
+        elif is_reaction:
+            # --- REACTION RENDERING MODE ---
+            # Parse reaction: "A + B → C + D"
+            import re as _re2
+            parts = _re2.split(r'\s*(?:→|⇌|->|<=>|=>|—>)\s*', input_text, maxsplit=1)
+            is_reversible = any(x in input_text for x in ['⇌', '<=>'])
+
+            if len(parts) == 2:
+                reactants = parts[0].strip()
+                products = parts[1].strip()
+            else:
+                reactants = input_text
+                products = ''
+
+            # Draw reactants on left
+            ax.text(0.15, 0.5, reactants, color='white', fontsize=14,
+                    fontweight='bold', ha='center', va='center', transform=ax.transAxes,
+                    fontfamily='DejaVu Sans')
+
+            # Draw arrow
+            arrow_style = '↔' if is_reversible else '→'
+            ax.text(0.5, 0.5, arrow_style, color='#5865F2', fontsize=28,
+                    fontweight='bold', ha='center', va='center', transform=ax.transAxes)
+
+            # Draw products on right
+            if products:
+                ax.text(0.85, 0.5, products, color='white', fontsize=14,
+                        fontweight='bold', ha='center', va='center', transform=ax.transAxes,
+                        fontfamily='DejaVu Sans')
+
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+
+        else:
+            # --- FORMULA / TEXT RENDERING MODE ---
+            # Render the chemical formula or structural formula as styled text
+            display_text = input_text.strip()
+
+            # Try to prettify structural formulas (CH3-CH2-OH style)
+            display_text = display_text.replace('-', '—')
+
+            ax.text(0.5, 0.5, display_text, color='white', fontsize=16,
+                    fontweight='bold', ha='center', va='center', transform=ax.transAxes,
+                    fontfamily='DejaVu Sans',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='#1E1F22',
+                              edgecolor='#5865F2', linewidth=1.5, alpha=0.95))
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+
+        fig.tight_layout(pad=0.3)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
+        buf.seek(0)
+        logging.info(f"[CHEM RENDER] Successfully rendered: {input_text[:60]}")
+        return buf
+
+    except Exception as e:
+        logging.warning(f"[CHEM RENDER] Primary render failed: {e}. Using text fallback.")
+        # Fail-safe text fallback
+        import textwrap as _tw
+        fig = Figure(figsize=(8, 3), dpi=180)
+        fig.patch.set_facecolor('#2B2D31')
+        ax = fig.subplots()
+        ax.set_facecolor('#1E1F22')
+        ax.axis('off')
+
+        wrapped = _tw.fill(input_text, width=55)
+        ax.text(0.5, 0.5, wrapped, color='#5865F2', fontsize=12,
+                ha='center', va='center', fontfamily='DejaVu Sans',
+                transform=ax.transAxes)
+
+        if title:
+            ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
+
+        fig.tight_layout(pad=0.2)
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
+        buf.seek(0)
+        return buf
+
+
 def generate_db_stats_chart(db_stats_data: dict, timeframe: str = "day") -> BytesIO:
     """
     Generates a dual-panel dashboard chart for Firestore Reads & Writes:

@@ -446,6 +446,50 @@ def _readability_checkpoint(puzzle: dict) -> dict:
     use_explanation_image = False
     question_image = None
     explanation_image = None
+    chemistry_image = None
+    
+    # --- Chemistry detection ---
+    # Look for molecule names, reaction arrows, and structural formulas
+    import re as _re_chem
+    _CHEM_MOLECULE_NAMES = [
+        'benzene', 'toluene', 'phenol', 'aniline', 'ethanol', 'methanol',
+        'propanol', 'butane', 'pentane', 'hexane', 'acetone', 'formaldehyde',
+        'acetaldehyde', 'acetic acid', 'formic acid', 'benzoic acid', 'glycine',
+        'alanine', 'glucose', 'fructose', 'sucrose', 'aspirin', 'naphthalene',
+        'glycerol', 'ethylene', 'propylene', 'acetylene', 'styrene',
+        'nitrobenzene', 'methylamine', 'ethylamine', 'ethyl acetate',
+        'methane', 'ethane', 'propane', 'ethene', 'propene', 'ethyne',
+        'oxalic acid',
+    ]
+    lower_text = full_text.lower()
+    has_chemistry = (
+        any(mol in lower_text for mol in _CHEM_MOLECULE_NAMES) or
+        any(arrow in full_text for arrow in ['→', '⇌', 'IUPAC', '—OH', '—COOH', '—NH₂', '—CHO']) or
+        bool(_re_chem.search(r'C\d*H\d+', full_text))  # Detects molecular formulas like C₆H₆, CH₄
+    )
+    
+    # Render chemistry structure image if chemistry content detected
+    if has_chemistry:
+        try:
+            from utils import render_chemistry_image
+            # Find the first molecule name mentioned
+            chem_input = None
+            for mol in _CHEM_MOLECULE_NAMES:
+                if mol in lower_text:
+                    chem_input = mol
+                    break
+            # Fallback: check for reaction arrows
+            if not chem_input:
+                for arrow in ['→', '⇌', '->', '<=>']:
+                    if arrow in full_text:
+                        chem_input = full_text[:200]
+                        break
+            if chem_input:
+                chemistry_image = render_chemistry_image(chem_input, "🧪 Structure Reference")
+                logging.info(f"[READABILITY] Chemistry content detected. Rendered structure for: {chem_input[:40]}")
+        except Exception as e:
+            logging.warning(f"[READABILITY] Chemistry render failed: {e}")
+            chemistry_image = None
     
     # Render question as image if:
     # - Readability score is low (< 70) after sanitization
@@ -473,8 +517,10 @@ def _readability_checkpoint(puzzle: dict) -> dict:
         'explanation_text': clean_explanation,
         'question_image': question_image,
         'explanation_image': explanation_image,
+        'chemistry_image': chemistry_image,
         'use_image': use_image,
         'use_explanation_image': use_explanation_image,
+        'has_chemistry': has_chemistry,
         'readability_score': score,
         'had_latex_leak': had_latex_leak,
     }
@@ -871,6 +917,17 @@ class PuzzleCog(commands.Cog):
                 puzzle_file = discord.File(checkpoint['question_image'], filename='puzzle_math.png')
                 embed.set_image(url='attachment://puzzle_math.png')
 
+            # Attach chemistry structure image if checkpoint detected chemistry
+            chem_file = None
+            if checkpoint.get('has_chemistry') and checkpoint.get('chemistry_image'):
+                chem_file = discord.File(checkpoint['chemistry_image'], filename='chem_structure.png')
+                # If no math image, use the chemistry image as the main embed image
+                if not puzzle_file:
+                    embed.set_image(url='attachment://chem_structure.png')
+                else:
+                    # Add as thumbnail if math image already occupies the main slot
+                    embed.set_thumbnail(url='attachment://chem_structure.png')
+
             embed.add_field(
                 name="\U0001f4cb Rules",
                 value=(
@@ -900,9 +957,17 @@ class PuzzleCog(commands.Cog):
                 if member.bot:
                     continue
                 try:
+                    # Build file list for DM
+                    dm_files = []
                     if puzzle_file:
                         puzzle_file.reset()
-                        await member.send(embed=embed, view=view, file=puzzle_file)
+                        dm_files.append(puzzle_file)
+                    if chem_file:
+                        chem_file.reset()
+                        dm_files.append(chem_file)
+                    
+                    if dm_files:
+                        await member.send(embed=embed, view=view, files=dm_files)
                     else:
                         await member.send(embed=embed, view=view)
                     dm_count += 1

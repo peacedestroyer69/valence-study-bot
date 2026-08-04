@@ -1116,7 +1116,15 @@ async def generate_puzzle(topic: str = "mixed", is_weekly: bool = False) -> dict
 It must have 4 options (A, B, C, D) and only one correct option.
 Output the puzzle draft including the question, the options, the correct answer, and your initial explanation.
 
-LATEX & MATH MANDATE: You MUST use standard LaTeX math notation ($...$, \\frac{{a}}{{b}}, \\sqrt{{x}}, \\alpha, \\theta, \\int, \\sum, x^2, \\lim, etc.) for ALL mathematical expressions, formulas, physics equations, and answer options! Our bot automatically renders all LaTeX formulas into crisp, high-res dark-mode images for Discord. ALWAYS write proper LaTeX ($...$) for any mathematical content."""
+LATEX & MATH MANDATE: You MUST use standard LaTeX math notation ($...$, \\frac{{a}}{{b}}, \\sqrt{{x}}, \\alpha, \\theta, \\int, \\sum, x^2, \\lim, etc.) for ALL mathematical expressions, formulas, physics equations, and answer options! Our bot automatically renders all LaTeX formulas into crisp, high-res dark-mode images for Discord. ALWAYS write proper LaTeX ($...$) for any mathematical content.
+
+CHEMISTRY NOTATION MANDATE: For Chemistry puzzles, you MUST use proper chemistry notation:
+- Use IUPAC nomenclature (e.g., 2-methylpropan-1-ol, ethanoic acid, benzene-1,4-diol)
+- Write structural formulas clearly (CH₃COOH, C₂H₅OH, C₆H₅NH₂)
+- Use proper reaction arrows: → for forward, ⇌ for equilibrium
+- Denote functional groups explicitly: —OH (hydroxyl), —COOH (carboxyl), —NH₂ (amine), —CHO (aldehyde), C=O (carbonyl)
+- Name reagents/catalysts above reaction arrows
+- Our bot renders molecule names (benzene, ethanol, glucose, etc.) and chemical reactions as structural diagrams automatically."""
         draft = await _call_gemini(draft_prompt, fallback="", timeout=timeout_val, model_preference=pref, max_output_tokens=tokens)
         if not draft:
             logging.warning("[PUZZLE PIPELINE] Failed to get draft.")
@@ -1196,6 +1204,12 @@ Feedback:
 LATEX & MATH MANDATE:
 - You MUST use standard LaTeX ($...$, \\frac{{a}}{{b}}, \\sqrt{{x}}, \\alpha, \\theta, \\int, \\sum, etc.) for all math equations, formulas, expressions, and options.
 - Keep JSON structure strictly valid.
+
+CHEMISTRY NOTATION MANDATE (for Chemistry puzzles):
+- Use proper IUPAC names and structural formulas (CH₃COOH, C₆H₅OH, etc.)
+- Use → for forward reactions, ⇌ for equilibrium
+- Write functional groups explicitly: —OH, —COOH, —NH₂, —CHO, C=O
+- Our bot renders these as structural diagrams automatically.
 
 Respond ONLY with a JSON object in this format (no markdown, no extra text):
 {{
