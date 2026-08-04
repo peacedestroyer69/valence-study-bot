@@ -848,18 +848,26 @@ async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None
     cleaned_code = _re_ql.sub(r'\\end\{document\}', '', cleaned_code)
     cleaned_code = cleaned_code.strip()
 
-    if not cleaned_code:
-        cleaned_code = raw_code
+    # Prepend required TeX packages directly inside formula string
+    # (QuickLaTeX ignores separate preamble POST parameters for mode 0/1)
+    packages_header = r'''\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{chemfig}
+\usepackage{mhchem}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, calc}
+'''
+    full_formula = packages_header + '\n' + cleaned_code
 
     params = urllib.parse.urlencode({
-        'formula': cleaned_code,
+        'formula': full_formula,
         'fsize': '18px',
         'fcolor': '000000',
         'bcolor': 'ffffff',
         'mode': '0',
         'out': '1',
-        'remhost': 'quicklatex.com',
-        'preamble': r'''\usepackage{amsmath}\usepackage{amsfonts}\usepackage{amssymb}\usepackage{chemfig}\usepackage{mhchem}\usepackage{tikz}\usetikzlibrary{arrows.meta, calc}'''
+        'remhost': 'quicklatex.com'
     }).encode('utf-8')
 
     try:
