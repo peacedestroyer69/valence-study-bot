@@ -853,9 +853,9 @@ async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None
 
     params = urllib.parse.urlencode({
         'formula': cleaned_code,
-        'fsize': '17px',
-        'fcolor': 'ffffff',
-        'bcolor': '2b2d31',
+        'fsize': '18px',
+        'fcolor': '000000',
+        'bcolor': 'ffffff',
         'mode': '0',
         'out': '1',
         'remhost': 'quicklatex.com',
@@ -873,9 +873,13 @@ async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None
                         async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=10)) as img_resp:
                             if img_resp.status == 200:
                                 data = await img_resp.read()
-                                buf = BytesIO(data)
+                                from PIL import Image, ImageOps
+                                raw_img = Image.open(BytesIO(data)).convert('RGB')
+                                dark_img = ImageOps.invert(raw_img)
+                                buf = BytesIO()
+                                dark_img.save(buf, format='PNG')
                                 buf.seek(0)
-                                logging.info(f"[QUICKLATEX] Successfully rendered LaTeX ({len(data)} bytes)")
+                                logging.info(f"[QUICKLATEX] Successfully rendered & inverted dark LaTeX ({len(buf.getvalue())} bytes)")
                                 return buf
                     else:
                         logging.warning(f"[QUICKLATEX] QuickLaTeX error output: {text[:200]}")
