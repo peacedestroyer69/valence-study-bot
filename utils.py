@@ -837,25 +837,22 @@ async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None
     if not raw_code:
         return None
 
-    # If it already has documentclass or begin{document}, use as-is
-    if r'\documentclass' in raw_code or r'\begin{document}' in raw_code:
-        full_code = raw_code
-    else:
-        # Wrap snippet in standalone document preamble
-        full_code = f"""\\documentclass[border=8pt]{{standalone}}
-\\usepackage{{amsmath}}
-\\usepackage{{amsfonts}}
-\\usepackage{{amssymb}}
-\\usepackage{{chemfig}}
-\\usepackage{{mhchem}}
-\\usepackage{{tikz}}
-\\usetikzlibrary{{arrows.meta, calc}}
-\\begin{{document}}
-{raw_code}
-\\end{{document}}"""
+    # Strip documentclass, usepackage, usetikzlibrary, begin/end document headers
+    # so QuickLaTeX doesn't typeset '\documentclass[border=8pt]{standalone}' as text!
+    import re as _re_ql
+    cleaned_code = raw_code
+    cleaned_code = _re_ql.sub(r'\\documentclass(\[[^\]]*\])?\{[^}]*\}', '', cleaned_code)
+    cleaned_code = _re_ql.sub(r'\\usepackage(\[[^\]]*\])?\{[^}]*\}', '', cleaned_code)
+    cleaned_code = _re_ql.sub(r'\\usetikzlibrary\{[^}]*\}', '', cleaned_code)
+    cleaned_code = _re_ql.sub(r'\\begin\{document\}', '', cleaned_code)
+    cleaned_code = _re_ql.sub(r'\\end\{document\}', '', cleaned_code)
+    cleaned_code = cleaned_code.strip()
+
+    if not cleaned_code:
+        cleaned_code = raw_code
 
     params = urllib.parse.urlencode({
-        'formula': full_code,
+        'formula': cleaned_code,
         'fsize': '17px',
         'fcolor': 'ffffff',
         'bcolor': '2b2d31',
