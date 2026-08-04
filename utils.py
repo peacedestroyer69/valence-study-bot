@@ -386,14 +386,159 @@ def generate_ai_stats_chart(stats_data: dict) -> BytesIO:
     return buf
 
 
+# ============================================================
+# UNICODE MATH CONVERTER — Rich fallback for Discord text
+# ============================================================
+_UNICODE_MATH_MAP = {
+    # Greek letters
+    '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ',
+    '\\epsilon': 'ε', '\\varepsilon': 'ε', '\\zeta': 'ζ', '\\eta': 'η',
+    '\\theta': 'θ', '\\vartheta': 'ϑ', '\\iota': 'ι', '\\kappa': 'κ',
+    '\\lambda': 'λ', '\\mu': 'μ', '\\nu': 'ν', '\\xi': 'ξ',
+    '\\pi': 'π', '\\rho': 'ρ', '\\sigma': 'σ', '\\tau': 'τ',
+    '\\upsilon': 'υ', '\\phi': 'φ', '\\varphi': 'φ', '\\chi': 'χ',
+    '\\psi': 'ψ', '\\omega': 'ω',
+    '\\Gamma': 'Γ', '\\Delta': 'Δ', '\\Theta': 'Θ', '\\Lambda': 'Λ',
+    '\\Xi': 'Ξ', '\\Pi': 'Π', '\\Sigma': 'Σ', '\\Phi': 'Φ',
+    '\\Psi': 'Ψ', '\\Omega': 'Ω',
+    # Operators & symbols
+    '\\times': '×', '\\div': '÷', '\\cdot': '·', '\\pm': '±', '\\mp': '∓',
+    '\\leq': '≤', '\\geq': '≥', '\\neq': '≠', '\\approx': '≈',
+    '\\equiv': '≡', '\\sim': '∼', '\\propto': '∝',
+    '\\infty': '∞', '\\partial': '∂', '\\nabla': '∇',
+    '\\forall': '∀', '\\exists': '∃', '\\in': '∈', '\\notin': '∉',
+    '\\subset': '⊂', '\\supset': '⊃', '\\subseteq': '⊆', '\\supseteq': '⊇',
+    '\\cup': '∪', '\\cap': '∩', '\\emptyset': '∅',
+    '\\int': '∫', '\\iint': '∬', '\\iiint': '∭', '\\oint': '∮',
+    '\\sum': '∑', '\\prod': '∏',
+    '\\rightarrow': '→', '\\leftarrow': '←', '\\leftrightarrow': '↔',
+    '\\Rightarrow': '⇒', '\\Leftarrow': '⇐', '\\Leftrightarrow': '⇔',
+    '\\to': '→', '\\mapsto': '↦',
+    '\\langle': '⟨', '\\rangle': '⟩',
+    '\\dots': '…', '\\cdots': '⋯', '\\ldots': '…', '\\vdots': '⋮',
+    '\\perp': '⊥', '\\parallel': '∥', '\\angle': '∠',
+    '\\triangle': '△', '\\square': '□', '\\star': '★',
+    '\\hbar': 'ℏ', '\\ell': 'ℓ',
+}
+
+_UNICODE_SUP = str.maketrans('0123456789+-=()aeiounx', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵉⁱᵒᵘⁿˣ')
+_UNICODE_SUB = str.maketrans('0123456789+-=()aeiounx', '₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₒᵤₙₓ')
+
+
+def latex_to_unicode(latex_str: str) -> str:
+    """Convert LaTeX math notation to rich Unicode text for Discord.
+    
+    Produces readable math using Unicode superscripts, subscripts,
+    Greek letters, and math operators instead of stripping to plaintext.
+    
+    Examples:
+        \\frac{a}{b}  →  a⁄b
+        \\sqrt{x}     →  √x
+        x^{2}         →  x²
+        \\int_0^\\infty →  ∫₀^∞
+        \\alpha        →  α
+        \\sum_{i=1}^{n} → ∑ᵢ₌₁ⁿ
+    """
+    import re as _re
+    text = latex_str.strip()
+    
+    # Strip math delimiters
+    text = _re.sub(r'^\s*\\\[|\s*\\\]\s*$', '', text)
+    text = _re.sub(r'^\s*\\\(\s*|\s*\\\)\s*$', '', text)
+    text = _re.sub(r'^\s*\$\$|\$\$\s*$', '', text)
+    text = _re.sub(r'^\s*\$|\$\s*$', '', text)
+    
+    # Step 1: Convert Greek letters and symbols FIRST (before super/sub processing)
+    for latex_cmd, unicode_char in sorted(_UNICODE_MATH_MAP.items(), key=lambda x: -len(x[0])):
+        text = text.replace(latex_cmd, unicode_char)
+    
+    # Step 2: \\vec{x} → x⃗, \\hat{x} → x̂, \\bar{x} → x̄, \\tilde{x} → x̃
+    text = _re.sub(r'\\vec\{([^}]*)\}', r'\1⃗', text)
+    text = _re.sub(r'\\hat\{([^}]*)\}', r'\1̂', text)
+    text = _re.sub(r'\\bar\{([^}]*)\}', r'\1̄', text)
+    text = _re.sub(r'\\tilde\{([^}]*)\}', r'\1̃', text)
+    
+    # Step 3: \\frac{...}{...} → ...⁄... (depth-aware brace matching)
+    def _extract_braced(s, pos):
+        """Extract content from {braced} group starting at pos, handling nesting."""
+        if pos >= len(s) or s[pos] != '{':
+            return None, pos
+        depth = 1
+        start = pos + 1
+        curr = start
+        while curr < len(s) and depth > 0:
+            if s[curr] == '{': depth += 1
+            elif s[curr] == '}': depth -= 1
+            curr += 1
+        return s[start:curr-1], curr
+    
+    while '\\frac' in text:
+        idx = text.find('\\frac')
+        after = idx + 5
+        # Skip optional whitespace
+        while after < len(text) and text[after] == ' ':
+            after += 1
+        numer, after = _extract_braced(text, after)
+        if numer is None:
+            break
+        while after < len(text) and text[after] == ' ':
+            after += 1
+        denom, after = _extract_braced(text, after)
+        if denom is None:
+            break
+        text = text[:idx] + f'({numer})⁄({denom})' + text[after:]
+    
+    # Step 4: \\sqrt{x} → √x   \\sqrt[n]{x} → ⁿ√x
+    text = _re.sub(r'\\sqrt\[([^\]]*)\]\{([^}]*)\}', lambda m: m.group(1).translate(_UNICODE_SUP) + '√' + m.group(2), text)
+    text = _re.sub(r'\\sqrt\{([^}]*)\}', r'√\1', text)
+    
+    # Step 5: Superscripts: x^{2n} → x²ⁿ   x^2 → x²
+    def _sup_replace(m):
+        content = m.group(1)
+        return content.translate(_UNICODE_SUP)
+    text = _re.sub(r'\^\{([^}]*)\}', _sup_replace, text)
+    text = _re.sub(r'\^([0-9a-zA-Z∞αβγδεζηθικλμνξπρστυφχψω])', lambda m: m.group(1).translate(_UNICODE_SUP), text)
+    
+    # Step 6: Subscripts: x_{i} → xᵢ   x_0 → x₀
+    def _sub_replace(m):
+        content = m.group(1)
+        return content.translate(_UNICODE_SUB)
+    text = _re.sub(r'_\{([^}]*)\}', _sub_replace, text)
+    text = _re.sub(r'_([0-9a-zA-Z])', lambda m: m.group(1).translate(_UNICODE_SUB), text)
+    
+    # Step 7: \\left / \\right delimiters → just the delimiter
+    text = _re.sub(r'\\left\s*', '', text)
+    text = _re.sub(r'\\right\s*', '', text)
+    
+    # Step 8: \\begin{...} / \\end{...} → remove
+    text = _re.sub(r'\\(?:begin|end)\{[^}]*\}', '', text)
+    
+    # Step 9: Trig/math functions  \\sin → sin, etc.
+    text = _re.sub(r'\\(sin|cos|tan|log|ln|exp|lim|max|min|det|gcd|sec|csc|cot)\b', r'\1', text)
+    
+    # Step 10: Any remaining \\command → just the command name
+    text = _re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+    
+    # Clean up braces and whitespace
+    text = text.replace('{', '').replace('}', '')
+    text = _re.sub(r'  +', ' ', text).strip()
+    
+    return text
+
+
 def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Formula") -> BytesIO:
     """
-    Renders LaTeX formula into a crisp dark-mode PNG image (TeXit style).
-    Uses matplotlib's built-in mathtext engine so no external TeX install is required.
-    Robustly handles complex TeX constructs, delimiters, and provides a guaranteed plain-text fallback.
+    Renders LaTeX formula into a crisp dark-mode PNG image.
+    Uses matplotlib's mathtext engine with Computer Modern fonts for authentic LaTeX look.
+    Supports multi-line equations (split on \\\\).
+    Provides a rich Unicode fallback instead of stripped plaintext.
     """
     import re as _re
     import textwrap as _textwrap
+    import matplotlib as _mpl
+    
+    # Use Computer Modern fonts for authentic LaTeX look
+    _mpl.rcParams['mathtext.fontset'] = 'cm'
 
     # 1. Clean delimiters and normalize unsupported TeX constructs
     raw_cleaned = formula_text.strip()
@@ -439,17 +584,34 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
     mathtext_str = _re.sub(r'\\left\s*([(\[|])', r'\1', mathtext_str)
     mathtext_str = _re.sub(r'\\right\s*([)\]|])', r'\1', mathtext_str)
     mathtext_str = _re.sub(r'\\cdots\b', r'\\dots', mathtext_str)
+    # Additional macro normalizations
+    mathtext_str = _re.sub(r'\\binom\{([^}]*)\}\{([^}]*)\}', r'\\frac{\1}{\2}', mathtext_str)
+    mathtext_str = _re.sub(r'\\boxed\{([^}]*)\}', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\cancel\{([^}]*)\}', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\underbrace\{([^}]*)\}', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\overbrace\{([^}]*)\}', r'\1', mathtext_str)
+    mathtext_str = _re.sub(r'\\xleftarrow\{([^}]*)\}', r'\\leftarrow', mathtext_str)
+    mathtext_str = _re.sub(r'\\xrightarrow\{([^}]*)\}', r'\\rightarrow', mathtext_str)
     mathtext_str = _re.sub(r'\n+', ' ', mathtext_str)
     mathtext_str = _re.sub(r'  +', ' ', mathtext_str)
 
-    if not mathtext_str.startswith('$'):
-        formatted_formula = f"${mathtext_str}$"
-    else:
-        formatted_formula = mathtext_str
+    # 2. Detect multi-line equations (split on \\\\ or \\newline)
+    lines = _re.split(r'\s*\\\\\s*|\s*\\newline\s*', mathtext_str)
+    lines = [l.strip() for l in lines if l.strip()]
+    is_multiline = len(lines) > 1
+    
+    # Wrap each line with $ delimiters
+    formatted_lines = []
+    for line in lines:
+        if not line.startswith('$'):
+            formatted_lines.append(f'${line}$')
+        else:
+            formatted_lines.append(line)
 
-    char_len = len(formatted_formula)
-    fig_width = max(7.0, min(14.0, char_len * 0.08))
-    fig_height = max(2.2, min(7.0, 0.4 * (formatted_formula.count('\n') + 1) + 1.8))
+    # Calculate figure dimensions
+    max_char_len = max(len(l) for l in formatted_lines)
+    fig_width = max(7.0, min(14.0, max_char_len * 0.08))
+    fig_height = max(2.2, min(10.0, len(formatted_lines) * 1.2 + 1.0))
 
     # Attempt primary Mathtext render pass
     try:
@@ -467,30 +629,36 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
         if title:
             ax.set_title(title, color='#B5BAC1', fontsize=10, pad=8, fontweight='bold')
 
-        fontsize_calc = max(11, min(18, int(220 / max(10, min(80, char_len)))))
-        ax.text(
-            0.5, 0.5,
-            formatted_formula,
-            color='white',
-            fontsize=fontsize_calc,
-            ha='center',
-            va='center',
-            fontweight='bold',
-            transform=ax.transAxes
-        )
+        if is_multiline:
+            # Multi-line: render each line at evenly spaced y positions
+            n = len(formatted_lines)
+            for i, line in enumerate(formatted_lines):
+                y_pos = 1.0 - (i + 0.5) / n  # Evenly distribute from top to bottom
+                fontsize_calc = max(10, min(16, int(200 / max(10, min(80, len(line))))))
+                ax.text(
+                    0.5, y_pos, line,
+                    color='white', fontsize=fontsize_calc,
+                    ha='center', va='center', transform=ax.transAxes
+                )
+        else:
+            # Single line
+            fontsize_calc = max(11, min(18, int(220 / max(10, min(80, max_char_len)))))
+            ax.text(
+                0.5, 0.5, formatted_lines[0],
+                color='white', fontsize=fontsize_calc,
+                ha='center', va='center', fontweight='bold',
+                transform=ax.transAxes
+            )
         fig.tight_layout(pad=0.2)
         buf = BytesIO()
         fig.savefig(buf, format='png', dpi=180, bbox_inches='tight', pad_inches=0.2)
         buf.seek(0)
         return buf
     except Exception as parse_err:
-        logging.warning(f"[LATEX RENDER] Primary render error: {parse_err}. Switching to Unicode plain-text fallback.")
+        logging.warning(f"[LATEX RENDER] Primary render error: {parse_err}. Switching to Unicode fallback.")
 
-        # Fail-safe plain text fallback
-        fallback_text = raw_cleaned
-        fallback_text = _re.sub(r'\\(?:frac|sqrt|left|right|begin|end|mathrm|mathbf|text)\b', '', fallback_text)
-        fallback_text = _re.sub(r'\\([a-zA-Z]+)', r'\1', fallback_text)
-        fallback_text = fallback_text.replace('{', '').replace('}', '').replace('$', '')
+        # Rich Unicode fallback (V2) — converts LaTeX to beautiful Unicode instead of stripping
+        fallback_text = latex_to_unicode(raw_cleaned)
         wrapped_fallback = _textwrap.fill(fallback_text, width=65)
 
         fig = Figure(figsize=(8.0, 3.0), dpi=180)
@@ -511,7 +679,7 @@ def render_latex_image(formula_text: str, title: str = "Mathematical Puzzle Form
             0.5, 0.5,
             wrapped_fallback,
             color='#5865F2',
-            fontsize=11,
+            fontsize=12,
             ha='center',
             va='center',
             fontfamily='DejaVu Sans',
@@ -652,19 +820,46 @@ def _draw_reaction_arrow(ax, x1, y1, x2, y2, color='#5865F2', linewidth=2.0,
                 ha='center', va='bottom', fontstyle='italic')
 
 
+async def fetch_pubchem_structure(molecule_name: str) -> 'BytesIO | None':
+    """Fetch 2D structure PNG from PubChem REST API and invert to dark-mode.
+    
+    Returns a BytesIO buffer with a dark-mode PNG, or None on failure.
+    Works for ANY molecule that PubChem knows about (millions of compounds).
+    """
+    import aiohttp
+    try:
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{molecule_name}/PNG?image_size=500x500"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    from PIL import Image, ImageOps
+                    img = Image.open(BytesIO(data)).convert('RGB')
+                    # Invert white-bg to dark-mode
+                    img = ImageOps.invert(img)
+                    buf = BytesIO()
+                    img.save(buf, format='PNG')
+                    buf.seek(0)
+                    logging.info(f"[PUBCHEM] Fetched structure for: {molecule_name}")
+                    return buf
+    except Exception as e:
+        logging.warning(f"[PUBCHEM] Failed to fetch {molecule_name}: {e}")
+    return None
+
+
 def render_chemistry_image(input_text: str, title: str = "Organic Chemistry") -> BytesIO:
     """
     Renders organic chemistry structures, reactions, and formulas as
     crisp dark-mode PNG images for Discord.
 
     Supports:
-    - Molecule names: "benzene", "ethanol", "aspirin", etc.
+    - Molecule names: "benzene", "ethanol", "aspirin", etc. (35+ built-in, infinite via PubChem)
     - Chemical equations: "CH3OH + O2 -> CO2 + H2O"
     - Reaction notation with arrows: "A → B", "A ⇌ B"
     - Raw structural formulas: "CH3-CH2-OH"
     - Functional group display
 
-    Uses pure matplotlib — no RDKit or external chemistry libraries needed.
+    Uses pure matplotlib for built-in molecules, PubChem API as async fallback.
     """
     import re as _re
     import textwrap as _textwrap

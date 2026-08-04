@@ -3678,19 +3678,40 @@ async def tex_command(interaction: discord.Interaction, formula: str):
 
 @bot.tree.command(name='chem', description='Render organic chemistry structures, reactions & formulas as images')
 @app_commands.describe(
-    molecule='Molecule name (benzene, ethanol), formula (CH₃COOH), or reaction (A → B)',
+    molecule='Molecule name (benzene, ethanol, ANY compound), formula (CH₃COOH), or reaction (A → B)',
     title='Optional title for the image'
 )
 async def chem_command(interaction: discord.Interaction, molecule: str, title: str = "Organic Chemistry"):
-    """Renders organic chemistry structures as high-res dark-mode PNG images."""
+    """Renders organic chemistry structures as high-res dark-mode PNG images.
+    Tries PubChem API first for publication-quality structures, falls back to matplotlib renderer."""
     await interaction.response.defer()
     try:
-        from utils import render_chemistry_image
-        loop = asyncio.get_running_loop()
-        img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
+        from utils import render_chemistry_image, fetch_pubchem_structure, _MOLECULE_DB
+        
+        img_buf = None
+        source = "matplotlib"
+        
+        # For known molecules and reactions, use our renderer
+        # For unknown molecules, try PubChem first (real 2D structures)
+        mol_clean = molecule.strip().lower()
+        is_known = mol_clean in _MOLECULE_DB or any(k in mol_clean for k in _MOLECULE_DB)
+        is_reaction = any(a in molecule for a in ['→', '⇌', '->', '<=>', '=>'])
+        
+        if not is_known and not is_reaction:
+            # Try PubChem API for real 2D structure
+            img_buf = await fetch_pubchem_structure(molecule.strip())
+            if img_buf:
+                source = "PubChem"
+        
+        # Fallback to our matplotlib renderer
+        if not img_buf:
+            loop = asyncio.get_running_loop()
+            img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
+        
         file = discord.File(img_buf, filename="molecule.png")
         embed = discord.Embed(
             title="🧪 Chemistry Render",
+            description=f"*Source: {source}*" if source == "PubChem" else "",
             color=0x00D166
         )
         embed.set_image(url="attachment://molecule.png")
