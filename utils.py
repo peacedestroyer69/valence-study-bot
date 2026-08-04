@@ -820,6 +820,73 @@ def _draw_reaction_arrow(ax, x1, y1, x2, y2, color='#5865F2', linewidth=2.0,
                 ha='center', va='bottom', fontstyle='italic')
 
 
+async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None':
+    """Renders raw LaTeX code (including chemfig, TikZ, matrices, complex QFT formulas)
+    into a crisp dark-mode image via QuickLaTeX API.
+    
+    Supports:
+    - Full documents (\\documentclass[...]{standalone} ... \\end{document})
+    - Snippets (\\chemfig{...}, \\begin{tikzpicture}..., \\begin{align}...)
+    - Inline / display math ($...$, \\[\\])
+    """
+    import aiohttp
+    import urllib.parse
+    from io import BytesIO
+
+    raw_code = latex_code.strip()
+    if not raw_code:
+        return None
+
+    # If it already has documentclass or begin{document}, use as-is
+    if r'\documentclass' in raw_code or r'\begin{document}' in raw_code:
+        full_code = raw_code
+    else:
+        # Wrap snippet in standalone document preamble
+        full_code = f"""\\documentclass[border=8pt]{{standalone}}
+\\usepackage{{amsmath}}
+\\usepackage{{amsfonts}}
+\\usepackage{{amssymb}}
+\\usepackage{{chemfig}}
+\\usepackage{{mhchem}}
+\\usepackage{{tikz}}
+\\usetikzlibrary{{arrows.meta, calc}}
+\\begin{{document}}
+{raw_code}
+\\end{{document}}"""
+
+    params = urllib.parse.urlencode({
+        'formula': full_code,
+        'fsize': '17px',
+        'fcolor': 'ffffff',
+        'bcolor': '2b2d31',
+        'mode': '0',
+        'out': '1',
+        'remhost': 'quicklatex.com',
+        'preamble': r'''\usepackage{amsmath}\usepackage{amsfonts}\usepackage{amssymb}\usepackage{chemfig}\usepackage{mhchem}\usepackage{tikz}\usetikzlibrary{arrows.meta, calc}'''
+    }).encode('utf-8')
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post('https://quicklatex.com/latex3.f', data=params, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    lines = text.splitlines()
+                    if lines and lines[0] == '0':
+                        img_url = lines[1].split()[0]
+                        async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=10)) as img_resp:
+                            if img_resp.status == 200:
+                                data = await img_resp.read()
+                                buf = BytesIO(data)
+                                buf.seek(0)
+                                logging.info(f"[QUICKLATEX] Successfully rendered LaTeX ({len(data)} bytes)")
+                                return buf
+                    else:
+                        logging.warning(f"[QUICKLATEX] QuickLaTeX error output: {text[:200]}")
+    except Exception as e:
+        logging.warning(f"[QUICKLATEX] Request failed: {e}")
+    return None
+
+
 async def fetch_pubchem_structure(molecule_name: str) -> 'BytesIO | None':
     """Fetch 2D structure PNG from PubChem REST API and invert to dark-mode.
     
@@ -866,12 +933,14 @@ def render_chemistry_image(input_text: str, title: str = "Organic Chemistry") ->
 
     input_clean = input_text.strip().lower()
 
-    # Check if it's a known molecule name
-    mol_info = _MOLECULE_DB.get(input_clean)
+    # Detect if input is raw LaTeX / chemfig / TikZ code
+    is_latex_code = any(k in input_clean for k in ['\\documentclass', '\\chemfig', '\\begin{', '\\node', '\\draw', '\\tikz', '\\setchemfig', '\\use'])
 
-    # Fuzzy match: only if input IS the molecule name plus extra words
-    # e.g. "benzene ring" matches "benzene", but "propanoate" does NOT match "propane"
-    if not mol_info:
+    # Check if it's a known molecule name ONLY if not raw LaTeX code
+    mol_info = None if is_latex_code else _MOLECULE_DB.get(input_clean)
+
+    # Fuzzy match: only if input IS the molecule name plus extra words (and not LaTeX code)
+    if not mol_info and not is_latex_code:
         import re as _re_mol
         for key in _MOLECULE_DB:
             # Require word boundary match — key must appear as a whole word

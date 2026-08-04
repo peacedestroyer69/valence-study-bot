@@ -3654,18 +3654,34 @@ async def db_stats_command(
         await interaction.followup.send(f"❌ Error generating DB stats: {e}", ephemeral=True)
 
 
-@bot.tree.command(name='tex', description='Render a LaTeX formula as a dark-mode image')
-@app_commands.describe(formula='LaTeX formula to render (e.g. e^{i\\pi} + 1 = 0)')
+@bot.tree.command(name='tex', description='Render a LaTeX formula or TikZ diagram as a dark-mode image')
+@app_commands.describe(formula='LaTeX formula, matrices, align environments, or TikZ code')
 async def tex_command(interaction: discord.Interaction, formula: str):
     """Renders LaTeX formula as a high-res dark-mode PNG image."""
     await interaction.response.defer()
     try:
-        from utils import render_latex_image
-        loop = asyncio.get_running_loop()
-        img_buf = await loop.run_in_executor(None, render_latex_image, formula, "")
+        from utils import render_latex_image, render_quicklatex
+        img_buf = None
+        source = "mathtext"
+        
+        # Check if input is full LaTeX, TikZ, or complex TeX constructs
+        is_complex = any(k in formula for k in ['\\begin', '\\documentclass', '\\mathcal', '\\mathfrak', '\\substack', '\\tikz', '\\chemfig', '\\matrix', '\\underbrace', '\\align'])
+        
+        if is_complex or len(formula) > 80:
+            img_buf = await render_quicklatex(formula)
+            if img_buf:
+                source = "QuickLaTeX Engine"
+                logging.info(f"[/tex] QuickLaTeX success for formula")
+
+        if not img_buf:
+            loop = asyncio.get_running_loop()
+            img_buf = await loop.run_in_executor(None, render_latex_image, formula, "")
+            source = "mathtext"
+            
         file = discord.File(img_buf, filename="formula.png")
         embed = discord.Embed(
-            title="📐 LaTeX Formula",
+            title="📐 LaTeX Render",
+            description=f"*Engine: {source}*" if source == "QuickLaTeX Engine" else "",
             color=0x5865F2
         )
         embed.set_image(url="attachment://formula.png")
@@ -3676,46 +3692,54 @@ async def tex_command(interaction: discord.Interaction, formula: str):
         await interaction.followup.send(f"❌ Error rendering formula: {e}", ephemeral=True)
 
 
-@bot.tree.command(name='chem', description='Render organic chemistry structures, reactions & formulas as images')
+@bot.tree.command(name='chem', description='Render organic chemistry structures, reactions & TikZ mechanisms as images')
 @app_commands.describe(
-    molecule='Molecule name (benzene, ethanol, ANY compound), formula (CH₃COOH), or reaction (A → B)',
+    molecule='Molecule name, IUPAC name, chemfig code, or full TikZ reaction mechanism',
     title='Optional title for the image'
 )
 async def chem_command(interaction: discord.Interaction, molecule: str, title: str = "Organic Chemistry"):
-    """Renders organic chemistry structures as high-res dark-mode PNG images.
-    Tries PubChem API first for publication-quality structures, falls back to matplotlib renderer."""
+    """Renders organic chemistry structures and reaction mechanisms as high-res dark-mode PNG images.
+    Supports raw LaTeX/chemfig/TikZ code, PubChem compound lookup, and local matplotlib fallback."""
     await interaction.response.defer()
     try:
-        from utils import render_chemistry_image, fetch_pubchem_structure, _MOLECULE_DB
+        from utils import render_chemistry_image, fetch_pubchem_structure, render_quicklatex, _MOLECULE_DB
         
         img_buf = None
         source = "matplotlib"
+        mol_clean = molecule.strip()
         
-        mol_clean = molecule.strip().lower()
-        is_reaction = any(a in molecule for a in ['→', '⇌', '->', '<=>', '=>'])
-        is_exact_match = mol_clean in _MOLECULE_DB  # Only exact DB matches skip PubChem
+        # 1. If input is raw LaTeX / chemfig / TikZ code, compile with QuickLaTeX FIRST
+        is_latex_code = any(k in mol_clean for k in ['\\documentclass', '\\chemfig', '\\begin{', '\\node', '\\draw', '\\tikz', '\\ce{', '\\setchemfig', '\\usepackage'])
         
-        # Strategy: ALWAYS try PubChem first for non-reactions
-        # PubChem has millions of compounds and handles IUPAC names, common names, everything
-        if not is_reaction:
-            try:
-                img_buf = await fetch_pubchem_structure(molecule.strip())
-                if img_buf:
-                    source = "PubChem"
-                    logging.info(f"[/chem] PubChem success for: {molecule[:60]}")
-            except Exception as pc_err:
-                logging.warning(f"[/chem] PubChem failed for '{molecule[:60]}': {pc_err}")
+        if is_latex_code:
+            img_buf = await render_quicklatex(mol_clean, title)
+            if img_buf:
+                source = "QuickLaTeX (ChemFig/TikZ)"
+                logging.info(f"[/chem] QuickLaTeX compiled chemfig/TikZ mechanism successfully")
+
+        # 2. If not LaTeX or QuickLaTeX failed, try PubChem API for compound names
+        if not img_buf:
+            is_reaction = any(a in molecule for a in ['→', '⇌', '->', '<=>', '=>'])
+            if not is_reaction and not is_latex_code:
+                try:
+                    img_buf = await fetch_pubchem_structure(mol_clean)
+                    if img_buf:
+                        source = "PubChem"
+                        logging.info(f"[/chem] PubChem success for: {molecule[:60]}")
+                except Exception as pc_err:
+                    logging.warning(f"[/chem] PubChem failed for '{molecule[:60]}': {pc_err}")
         
-        # Fallback to our matplotlib renderer (works for reactions + known molecules)
+        # 3. Fallback to local matplotlib renderer
         if not img_buf:
             loop = asyncio.get_running_loop()
             img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
+            source = "matplotlib"
             logging.info(f"[/chem] Matplotlib fallback for: {molecule[:60]}")
         
         file = discord.File(img_buf, filename="molecule.png")
         embed = discord.Embed(
             title="🧪 Chemistry Render",
-            description=f"*Source: {source}*" if source == "PubChem" else "",
+            description=f"*Source: {source}*" if source != "matplotlib" else "",
             color=0x00D166
         )
         embed.set_image(url="attachment://molecule.png")
