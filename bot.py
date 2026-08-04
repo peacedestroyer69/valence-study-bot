@@ -3691,22 +3691,26 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
         img_buf = None
         source = "matplotlib"
         
-        # For known molecules and reactions, use our renderer
-        # For unknown molecules, try PubChem first (real 2D structures)
         mol_clean = molecule.strip().lower()
-        is_known = mol_clean in _MOLECULE_DB or any(k in mol_clean for k in _MOLECULE_DB)
         is_reaction = any(a in molecule for a in ['→', '⇌', '->', '<=>', '=>'])
+        is_exact_match = mol_clean in _MOLECULE_DB  # Only exact DB matches skip PubChem
         
-        if not is_known and not is_reaction:
-            # Try PubChem API for real 2D structure
-            img_buf = await fetch_pubchem_structure(molecule.strip())
-            if img_buf:
-                source = "PubChem"
+        # Strategy: ALWAYS try PubChem first for non-reactions
+        # PubChem has millions of compounds and handles IUPAC names, common names, everything
+        if not is_reaction:
+            try:
+                img_buf = await fetch_pubchem_structure(molecule.strip())
+                if img_buf:
+                    source = "PubChem"
+                    logging.info(f"[/chem] PubChem success for: {molecule[:60]}")
+            except Exception as pc_err:
+                logging.warning(f"[/chem] PubChem failed for '{molecule[:60]}': {pc_err}")
         
-        # Fallback to our matplotlib renderer
+        # Fallback to our matplotlib renderer (works for reactions + known molecules)
         if not img_buf:
             loop = asyncio.get_running_loop()
             img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
+            logging.info(f"[/chem] Matplotlib fallback for: {molecule[:60]}")
         
         file = discord.File(img_buf, filename="molecule.png")
         embed = discord.Embed(

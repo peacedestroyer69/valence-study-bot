@@ -869,10 +869,13 @@ def render_chemistry_image(input_text: str, title: str = "Organic Chemistry") ->
     # Check if it's a known molecule name
     mol_info = _MOLECULE_DB.get(input_clean)
 
-    # Also try without common suffixes
+    # Fuzzy match: only if input IS the molecule name plus extra words
+    # e.g. "benzene ring" matches "benzene", but "propanoate" does NOT match "propane"
     if not mol_info:
+        import re as _re_mol
         for key in _MOLECULE_DB:
-            if key in input_clean or input_clean in key:
+            # Require word boundary match — key must appear as a whole word
+            if _re_mol.search(r'\b' + _re_mol.escape(key) + r'\b', input_clean):
                 mol_info = _MOLECULE_DB[key]
                 break
 
