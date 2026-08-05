@@ -3921,8 +3921,8 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
                 source = "Newton Math API"
                 solution_str = f"Newton Calculus Engine:\n{nt_res}"
 
-        # Tier 4: Gemini AI Math Tutor
-        if not solution_str or len(solution_str) < 15:
+        # Tier 4: Gemini AI Math Tutor (Only fallback if Tiers 1-3 couldn't solve it)
+        if not solution_str:
             gem_data = await fetch_gemini_math_info(q_clean)
             if gem_data:
                 source = f"Gemini AI Solver ({gem_data.get('type', 'Math')})"
