@@ -961,14 +961,32 @@ ELEMENTS_DB = {
     92: {'num': 92, 'symbol': 'U', 'name': 'Uranium', 'mass': '238.03', 'category': 'Actinide', 'config': '[Rn] 5f³ 6d¹ 7s²', 'shells': '2, 8, 18, 32, 21, 9, 2', 'en': '1.38', 'melt': '1132.2 °C', 'boil': '4131 °C', 'density': '19.1 g/cm³', 'color': '#9B59B6'}
 }
 
-# Lookup map for elements by symbol or name
+# Extended superheavy & systematic elements database
+_SUPERHEAVY_ELEMENTS = {
+    113: {'num': 113, 'symbol': 'Nh', 'name': 'Nihonium', 'mass': '286', 'category': 'Post-Transition Metal / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p¹', 'shells': '2, 8, 18, 32, 32, 18, 3', 'en': 'N/A', 'melt': '430 °C (pred.)', 'boil': '1130 °C (pred.)', 'density': '16 g/cm³', 'color': '#95A5A6'},
+    114: {'num': 114, 'symbol': 'Fl', 'name': 'Flerovium', 'mass': '289', 'category': 'Post-Transition Metal / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p²', 'shells': '2, 8, 18, 32, 32, 18, 4', 'en': 'N/A', 'melt': '-60 °C (pred.)', 'boil': '-60 °C (pred.)', 'density': '14 g/cm³', 'color': '#95A5A6'},
+    115: {'num': 115, 'symbol': 'Mc', 'name': 'Moscovium', 'mass': '290', 'category': 'Post-Transition Metal / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p³', 'shells': '2, 8, 18, 32, 32, 18, 5', 'en': 'N/A', 'melt': '400 °C (pred.)', 'boil': '1100 °C (pred.)', 'density': '13.5 g/cm³', 'color': '#95A5A6'},
+    116: {'num': 116, 'symbol': 'Lv', 'name': 'Livermorium', 'mass': '293', 'category': 'Post-Transition Metal / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p⁴', 'shells': '2, 8, 18, 32, 32, 18, 6', 'en': 'N/A', 'melt': '435 °C (pred.)', 'boil': '812 °C (pred.)', 'density': '12.9 g/cm³', 'color': '#95A5A6'},
+    117: {'num': 117, 'symbol': 'Ts', 'name': 'Tennessine', 'mass': '294', 'category': 'Halogen / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p⁵', 'shells': '2, 8, 18, 32, 32, 18, 7', 'en': 'N/A', 'melt': '450 °C (pred.)', 'boil': '610 °C (pred.)', 'density': '7.2 g/cm³', 'color': '#E91E63'},
+    118: {'num': 118, 'symbol': 'Og', 'name': 'Oganesson', 'mass': '294', 'category': 'Noble Gas / Superheavy', 'config': '[Rn] 5f¹⁴ 6d¹⁰ 7s² 7p⁶', 'shells': '2, 8, 18, 32, 32, 18, 8', 'en': 'N/A', 'melt': '52 °C (pred.)', 'boil': '177 °C (pred.)', 'density': '4.9 g/cm³', 'color': '#A652BB'},
+    119: {'num': 119, 'symbol': 'Uue', 'name': 'Ununennium', 'mass': '315 (pred.)', 'category': 'Alkali Metal (Period 8 / Hypothetical)', 'config': '[Og] 8s¹', 'shells': '2, 8, 18, 32, 32, 18, 8, 1', 'en': 'N/A', 'melt': '0 °C (pred.)', 'boil': '630 °C (pred.)', 'density': '3.0 g/cm³', 'color': '#FEE75C'},
+    120: {'num': 120, 'symbol': 'Ubn', 'name': 'Unbinilium', 'mass': '300 (pred.)', 'category': 'Alkaline Earth Metal (Period 8 / Hypothetical)', 'config': '[Og] 8s²', 'shells': '2, 8, 18, 32, 32, 18, 8, 2', 'en': 'N/A', 'melt': '680 °C (pred.)', 'boil': '1700 °C (pred.)', 'density': '14 g/cm³', 'color': '#F47B67'},
+}
+
 ELEMENT_LOOKUP = {}
 for num, data in ELEMENTS_DB.items():
     ELEMENT_LOOKUP[data['symbol'].lower()] = data
     ELEMENT_LOOKUP[data['name'].lower()] = data
+    ELEMENT_LOOKUP[str(num)] = data
+
+for num, data in _SUPERHEAVY_ELEMENTS.items():
+    ELEMENT_LOOKUP[data['symbol'].lower()] = data
+    ELEMENT_LOOKUP[data['name'].lower()] = data
+    ELEMENT_LOOKUP[str(num)] = data
+
 
 def get_element_info(query: str) -> dict:
-    """Returns element dictionary if query matches an element symbol or name, else None."""
+    """Returns element dictionary if query matches an element symbol, name, or atomic number (1-120+)."""
     if not query:
         return None
     q = query.strip().lower()
