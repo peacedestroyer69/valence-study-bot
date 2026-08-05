@@ -1686,6 +1686,26 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 async def _handle_join(member: discord.Member, channel: discord.VoiceChannel):
     """Processes a voice channel join event."""
     try:
+        # CHECK IF USER IS QUARANTINED / LOCKED OUT
+        data = await load_data()
+        udata = data.get("users", {}).get(str(member.id), {})
+        if udata.get("quarantined"):
+            try:
+                await member.move_to(None)  # Disconnect from voice channel
+            except Exception:
+                pass
+            try:
+                await member.send(
+                    "🔒 **ACCESS DENIED — SERVER ACCESS LOCKED OUT**\n\n"
+                    "You are currently on probation/lockout for missing study days or puzzles.\n"
+                    "You cannot join study voice channels until you verify!\n\n"
+                    "**How to unlock:** Type `/verify` in `#general` or `#bot-command` and solve 3 verification puzzles."
+                )
+            except Exception:
+                pass
+            log_info("QUARANTINE BLOCKED", f"disconnected from #{channel.name}", member)
+            return
+
         ch_type = get_channel_type(channel.id)
         if ch_type == "untracked":
             return
@@ -1968,6 +1988,30 @@ async def on_message(message: discord.Message):
     """Tracks messages in study text channels for the text activity leaderboard."""
     if message.author.bot:
         return
+
+    # QUARANTINE / LOCKOUT TEXT PROTECTION
+    if message.guild and isinstance(message.author, discord.Member):
+        uid_str = str(message.author.id)
+        data = await load_data()
+        udata = data.get("users", {}).get(uid_str, {})
+        if udata.get("quarantined"):
+            # Allow messaging in #general, #general-meet, #bot-command so they can use /verify and talk to admins
+            allowed_ids = {GENERAL_CHANNEL_ID, STUDY_TEXT_CHANNEL_ID}
+            ch_name = message.channel.name.lower() if hasattr(message.channel, 'name') else ""
+            if message.channel.id not in allowed_ids and "general" not in ch_name and "bot-command" not in ch_name:
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                try:
+                    await message.channel.send(
+                        f"🔒 <@{message.author.id}> **Access Denied**: You are currently locked out of study channels due to missed study days/puzzles. "
+                        f"You can chat in `#general` or use `/verify` to restore your full access!",
+                        delete_after=10
+                    )
+                except Exception:
+                    pass
+                return
 
     # Track messages in study text channels
     if message.channel.id in STUDY_TEXT_CHANNELS:
@@ -3951,6 +3995,79 @@ async def shutdown(sig=None):
     logging.info(f"Cancelling {len(tasks)} outstanding tasks...")
     await asyncio.gather(*tasks, return_exceptions=True)
     logging.info("Shutdown complete.")
+
+# ============================================================
+# SLASH COMMANDS: /admin_override & /unquarantine
+# ============================================================
+
+@bot.tree.command(name='admin_override', description='Unlock a user from probation/quarantine and reset their strikes to 0')
+@app_commands.describe(
+    user='The member to unlock from probation/lockout',
+    reason='Optional reason for override'
+)
+async def admin_override_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
+    """Admin command to instantly un-quarantine any locked out user and reset their strikes."""
+    is_admin = (
+        interaction.user.guild_permissions.administrator or
+        interaction.user.guild_permissions.manage_guild or
+        interaction.user.id in (VALENCE_ID, UJJWAL_ID)
+    )
+    if not is_admin:
+        await interaction.response.send_message("❌ Only admins can execute `/admin_override`.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    async with bot.db_write_lock:
+        data = await load_data()
+        uid = str(user.id)
+        udata = ensure_user(data, user)
+        udata["quarantined"] = False
+        udata["discipline_strikes"] = 0
+        udata["puzzle_verify_failed"] = False
+        await save_data(data)
+
+    # Send DM to the unlocked user
+    try:
+        embed = discord.Embed(
+            title="🔓 ADMIN OVERRIDE EXECUTED",
+            description=(
+                f"An admin (**{interaction.user.display_name}**) has unlocked your server access!\n\n"
+                f"**Reason:** {reason}\n"
+                f"Your discipline strikes have been reset to 0 and full study channel access is restored."
+            ),
+            color=0x57F287
+        )
+        await user.send(embed=embed)
+    except Exception:
+        pass
+
+    # Send followup response
+    res_embed = discord.Embed(
+        title="🔓 Admin Override Successful",
+        description=f"Successfully unlocked **{user.display_name}** (<@{user.id}>) and reset strikes to 0.\n**Reason:** {reason}",
+        color=0x57F287
+    )
+    await interaction.followup.send(embed=res_embed)
+
+    # Post in #general
+    try:
+        gen = await bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
+        if gen and gen.id != interaction.channel_id:
+            await gen.send(f"🔓 **Admin Override:** <@{user.id}> has been unlocked by <@{interaction.user.id}>.")
+    except Exception as err:
+        logging.error(f"[ADMIN_OVERRIDE] Error announcing in general: {err}")
+
+
+@bot.tree.command(name='unquarantine', description='Unlock a user from probation/quarantine and reset their strikes to 0')
+@app_commands.describe(
+    user='The member to unlock from probation/lockout',
+    reason='Optional reason for override'
+)
+async def unquarantine_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
+    """Alias for /admin_override command."""
+    await admin_override_command(interaction, user, reason)
+
 
 async def main():
     await start_keepalive_server()

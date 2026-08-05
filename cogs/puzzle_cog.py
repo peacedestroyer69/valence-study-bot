@@ -1393,7 +1393,9 @@ class PuzzleCog(commands.Cog):
                 async with self.bot.db_write_lock:
                     fresh_data = await self.bot.load_data()
                     fresh_udata = fresh_data.setdefault("users", {}).setdefault(uid, {})
-                    fresh_udata["puzzle_kicks"] = fresh_udata.get("puzzle_kicks", 0) + 1
+                    fresh_udata["quarantined"] = True
+                    fresh_udata["quarantine_reason"] = f"Did not solve Puzzle of the Day ({kick_date_str})"
+                    fresh_udata["quarantine_timestamp"] = int(time.time())
                     await self.bot.save_data(fresh_data)
 
                 from cogs.gemini_brain import personalized_kick_msg
@@ -1408,36 +1410,35 @@ class PuzzleCog(commands.Cog):
                     )
                 except Exception as ai_err:
                     logging.warning(f"[PUZZLE] Gemini kick message generation failed for {member.display_name}: {ai_err}")
-                    ai_kick = "You failed to solve the daily puzzle. Server standards require active learning. Solve your tasks or remain kicked."
+                    ai_kick = "You failed to solve the daily puzzle. Server standards require active learning."
                 
-                invite_line = f"\n\n\U0001f517 **Rejoin:** {SERVER_INVITE_LINK}" if SERVER_INVITE_LINK else ""
-                kick_msg = (
-                    f"# \U0001f528 KICKED FROM YPT STUDY SERVER\n\n"
+                probation_msg = (
+                    f"🔒 **PROBATION NOTICE — SERVER ACCESS LOCKED OUT**\n\n"
                     f"{ai_kick}\n\n"
-                    f"**To rejoin:** Use `/verify` and solve {VERIFY_PUZZLES_REQUIRED} archived puzzles."
-                    f"{invite_line}"
+                    f"Your access to **study voice channels and study text channels** has been **LOCKED**.\n"
+                    f"**How to restore access:** Solve 3 verification puzzles using `/verify` in `#general` or `#bot-command`."
                 )
 
                 try:
-                    await member.send(kick_msg)
+                    embed = discord.Embed(
+                        title="🔒 PROBATION / LOCKED OUT — YPT STUDY SERVER",
+                        description=probation_msg,
+                        color=0xED4245,
+                    )
+                    await member.send(embed=embed)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-                try:
-                    await member.kick(reason=f"Did not solve Puzzle of the Day ({kick_date_str})")
-                    kicked_count += 1
-                    logging.info(f"[PUZZLE] Kicked {member.display_name} for unsolved puzzle")
-                except discord.Forbidden:
-                    logging.warning(f"[PUZZLE] Cannot kick {member.display_name} (no permission)")
-                except Exception as e:
-                    logging.error(f"[PUZZLE] Error kicking {member.display_name}: {e}")
+                kicked_count += 1
+                logging.info(f"[PUZZLE] Placed {member.display_name} on probation for unsolved puzzle")
 
                 await asyncio.sleep(1)
 
             if kicked_count > 0:
                 await channel.send(
-                    f"🔨 **Midnight Reckoning:** {kicked_count} member{'s' if kicked_count > 1 else ''} "
-                    f"got kicked for not solving today's puzzle. The bar is set. Step up or step out."
+                    f"🔒 **Midnight Reckoning:** {kicked_count} member{'s' if kicked_count > 1 else ''} "
+                    f"got placed on **PROBATION / LOCKOUT** for not solving today's puzzle. "
+                    f"Their study channels are locked until they verify with `/verify`!"
                 )
             else:
                 await channel.send(
@@ -1685,31 +1686,26 @@ class PuzzleCog(commands.Cog):
             async with self.bot.db_write_lock:
                 fresh_data = await self.bot.load_data()
                 fresh_udata = fresh_data.setdefault("users", {}).setdefault(uid, {})
+                fresh_udata["quarantined"] = False
+                fresh_udata["discipline_strikes"] = 0
                 fresh_udata["puzzle_verify_failed"] = False
                 fresh_udata["puzzle_verify_last"] = now_ist.isoformat()
                 await self.bot.save_data(fresh_data)
 
-            try:
-                guild = interaction.guild or (self.bot.guilds[0] if self.bot.guilds else None)
-                if guild:
-                    member = guild.get_member(interaction.user.id)
-                    if not member:
-                        member = await guild.fetch_member(interaction.user.id)
-                    if member:
-                        unverified_role = discord.utils.get(guild.roles, name="Unverified")
-                        if unverified_role and unverified_role in member.roles:
-                            await member.remove_roles(unverified_role)
-                            logging.info(f"[PUZZLE] Removed Unverified role from {member.display_name}")
-            except Exception as role_err:
-                logging.warning(f"Could not remove Unverified role: {role_err}")
-
-            invite_msg = f"\n\n🔗 **Rejoin link:** {SERVER_INVITE_LINK}" if SERVER_INVITE_LINK else "\n\nAsk a server admin to re-invite you."
             await interaction.user.send(
                 f"🎉 **Verification Passed! {score}/{VERIFY_PUZZLES_REQUIRED} correct!**\n\n"
-                f"You've proven you belong here. Welcome back.\n"
-                f"Don't let this happen again — solve the daily puzzle every day.{invite_msg}"
+                f"🔓 **Your full server access has been restored.** You can now join study voice channels and text in study channels.\n"
+                f"Don't let this happen again — keep up your daily study goals!"
             )
             logging.info(f"[PUZZLE] {interaction.user.display_name} passed verification ({score}/{VERIFY_PUZZLES_REQUIRED})")
+
+            # Post announcement in #general
+            try:
+                gen = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
+                if gen:
+                    await gen.send(f"✅ <@{interaction.user.id}> has successfully passed verification and is **UNLOCKED**!")
+            except Exception as announce_err:
+                logging.error(f"[PUZZLE] Failed sending verification announcement to general: {announce_err}")
 
         except discord.Forbidden:
             await interaction.followup.send(

@@ -473,10 +473,14 @@ class DisciplineCog(commands.Cog):
                     except Exception as warn_err:
                         logging.error(f"[DISCIPLINE] Failed sending warning to general channel: {warn_err}")
 
-                # 3. AUTO-KICK at strike 4+
+                # 3. PROBATION / LOCKOUT at strike 4+ (REPLACES SERVER KICK)
                 elif strikes >= STRIKES_TO_KICK:
                     try:
-                        invite_link = await self._get_invite_link(guild)
+                        my_data["quarantined"] = True
+                        my_data["quarantine_reason"] = f"Missed {strikes} consecutive study days"
+                        my_data["quarantine_timestamp"] = int(now_ist.timestamp())
+                        strike_updates[uid_str] = strikes
+                        db_changed = True
 
                         hours_alltime = my_data.get("total_seconds_alltime", 0) / 3600
                         hours_today_approx = my_data.get("total_seconds_today", 0) / 3600
@@ -494,47 +498,39 @@ class DisciplineCog(commands.Cog):
                         except Exception as gem_err:
                             logging.error(f"[DISCIPLINE] Gemini personalized kick message failed: {gem_err}")
                             ai_kick_text = (
-                                f"You missed the puzzle and barely showed up today. "
-                                f"This server exists for serious JEE aspirants, and right now you're not acting like one. "
-                                f"Use /verify to rejoin — solve 3 puzzles and prove you belong here."
+                                f"You missed 4 consecutive study days. "
+                                f"This server exists for serious JEE aspirants, and right now you're not acting like one."
                             )
 
-                        full_kick_msg = (
+                        full_probation_msg = (
                             f"{ai_kick_text}\n\n"
-                            f"You missed **{strikes} consecutive days** of studying.\n"
-                            f"**Rejoin link:** {invite_link}\n\n"
-                            f"*This is your wake-up call. Don't waste it.*"
+                            f"🔒 **PROBATION NOTICE — SERVER ACCESS LOCKED OUT**\n"
+                            f"You missed **{strikes} consecutive study days**.\n"
+                            f"Instead of kicking you out of the server, your access to **study voice channels and study text channels** has been **LOCKED**.\n\n"
+                            f"**How to restore your full server access:**\n"
+                            f"1. Solve 3 verification puzzles using `/verify` in `#general` or `#bot-command`.\n"
+                            f"2. Or chat in `#general` to talk to admins if needed.\n"
+                            f"3. An admin can also unlock you with `/admin_override`."
                         )
                         try:
                             embed = discord.Embed(
-                                title="🔨 KICKED FROM STUDY BOI",
-                                description=full_kick_msg,
+                                title="🔒 PROBATION / LOCKED OUT — YPT STUDY SERVER",
+                                description=full_probation_msg,
                                 color=0xED4245,
                             )
                             await member.send(embed=embed)
                         except discord.Forbidden:
                             pass
 
-                        await member.kick(
-                            reason=f"Missed {strikes} consecutive days of study."
-                        )
                         await general_channel.send(
-                            f"\U0001f528 <@{uid_str}> has been **kicked** from the server "
-                            f"for missing {strikes} consecutive days of study.\n"
-                            f"They received a DM with an invite link to rejoin \u2014 "
-                            f"**only if they're serious this time.**"
+                            f"🔒 <@{uid_str}> has been placed on **PROBATION / LOCKOUT** "
+                            f"for missing {strikes} consecutive study days.\n"
+                            f"Their study voice and text channel access is locked. "
+                            f"They can text in `#general` or use `/verify` to restore access!"
                         )
-                        logging.info(f"[DISCIPLINE] Kicked {my_data.get('username', uid_str)}")
-                    except discord.Forbidden:
-                        try:
-                            await general_channel.send(
-                                f"\u274c I tried to kick <@{uid_str}> for missing "
-                                f"{strikes} days, but I lack the permissions!"
-                            )
-                        except Exception:
-                            pass
-                    except Exception as kick_err:
-                        logging.error(f"[DISCIPLINE] General error kicking user {uid_str}: {kick_err}")
+                        logging.info(f"[DISCIPLINE] Placed {my_data.get('username', uid_str)} on probation")
+                    except Exception as lock_err:
+                        logging.error(f"[DISCIPLINE] Error placing user {uid_str} on probation: {lock_err}")
             else:
                 # ---- STUDIED: Reset strikes ----
                 if strikes > 0:
