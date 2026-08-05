@@ -3694,17 +3694,18 @@ async def tex_command(interaction: discord.Interaction, formula: str):
 
 @bot.tree.command(name='chem', description='Render organic chemistry structures, reactions, elements & concepts as images')
 @app_commands.describe(
-    molecule='Molecule name, IUPAC name, element, chemfig code, reaction, or chemistry concept',
+    molecule='Molecule name, IUPAC name, element (H, Hydrogen, Au, Gold), chemfig code, reaction, or concept',
     title='Optional title for the image'
 )
 async def chem_command(interaction: discord.Interaction, molecule: str, title: str = "Organic Chemistry"):
     """Renders organic chemistry structures, reaction mechanisms, elements & chemistry cards as high-res dark-mode PNG images.
-    Uses QuickLaTeX -> Cactus Resolver -> PubChem -> Gemini AI Info Card -> Matplotlib Fallback."""
+    Uses QuickLaTeX -> Periodic Table Element Card -> Cactus Resolver -> PubChem -> Gemini AI Info Card -> Matplotlib Fallback."""
     await interaction.response.defer()
     try:
         from utils import (
             render_chemistry_image, fetch_pubchem_structure, fetch_cactus_structure,
-            render_quicklatex, render_chemistry_info_card, _MOLECULE_DB
+            render_quicklatex, render_chemistry_info_card, get_element_info, render_element_card,
+            _MOLECULE_DB
         )
         from cogs.gemini_brain import fetch_gemini_chemistry_info
         
@@ -3720,7 +3721,17 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
                 source = "QuickLaTeX Engine"
                 logging.info(f"[/chem] QuickLaTeX compiled chemfig/TikZ mechanism for '{molecule[:40]}'")
 
-        # Tier 2: NCI/NIH Cactus Resolver API (Primary 2D Chemical Identifier Resolver)
+        # Tier 2: Periodic Table Element Card (for elements like 'H', 'Hydrogen', 'Fe', 'Gold', 'U', 'Uranium')
+        if not img_buf and not is_latex_code:
+            elem_data = get_element_info(mol_clean)
+            if elem_data:
+                loop = asyncio.get_running_loop()
+                img_buf = await loop.run_in_executor(None, render_element_card, elem_data)
+                if img_buf:
+                    source = "Valence Periodic Table Engine"
+                    logging.info(f"[/chem] Rendered Periodic Table Element Card for '{mol_clean}'")
+
+        # Tier 3: NCI/NIH Cactus Resolver API (Primary 2D Chemical Identifier Resolver)
         if not img_buf and not is_latex_code:
             try:
                 img_buf = await fetch_cactus_structure(mol_clean)
@@ -3730,7 +3741,7 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
             except Exception as cactus_err:
                 logging.warning(f"[/chem] Cactus failed for '{molecule[:40]}': {cactus_err}")
 
-        # Tier 3: PubChem REST API (Secondary 100+ million compound database)
+        # Tier 4: PubChem REST API (Secondary 100+ million compound database)
         if not img_buf and not is_latex_code:
             try:
                 img_buf = await fetch_pubchem_structure(mol_clean)
@@ -3740,7 +3751,7 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
             except Exception as pc_err:
                 logging.warning(f"[/chem] PubChem failed for '{molecule[:40]}': {pc_err}")
 
-        # Tier 4: Gemini AI Chemistry Info Card (For non-2D structure queries like 'tar', 'acid rain', 'petroleum')
+        # Tier 5: Gemini AI Chemistry Info Card (For non-2D structure queries like 'tar', 'acid rain', 'petroleum')
         if not img_buf and not is_latex_code:
             try:
                 info_data = await fetch_gemini_chemistry_info(mol_clean)
@@ -3753,7 +3764,7 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
             except Exception as ai_err:
                 logging.warning(f"[/chem] Gemini info card failed for '{molecule[:40]}': {ai_err}")
 
-        # Tier 5: Local Matplotlib Molecule & Reaction Renderer (Fail-safe fallback)
+        # Tier 6: Local Matplotlib Molecule & Reaction Renderer (Fail-safe fallback)
         if not img_buf:
             loop = asyncio.get_running_loop()
             img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)

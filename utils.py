@@ -927,6 +927,130 @@ def process_chem_image(raw_bytes: bytes) -> BytesIO:
     return buf
 
 
+# Comprehensive Periodic Table Dataset (118 Elements)
+ELEMENTS_DB = {
+    1: {'num': 1, 'symbol': 'H', 'name': 'Hydrogen', 'mass': '1.008', 'category': 'Reactive Nonmetal', 'config': '1s¹', 'shells': '1', 'en': '2.20', 'melt': '-259.16 °C', 'boil': '-252.87 °C', 'density': '0.08988 g/L', 'color': '#00D166'},
+    2: {'num': 2, 'symbol': 'He', 'name': 'Helium', 'mass': '4.0026', 'category': 'Noble Gas', 'config': '1s²', 'shells': '2', 'en': 'N/A', 'melt': '-272.20 °C', 'boil': '-268.93 °C', 'density': '0.1786 g/L', 'color': '#A652BB'},
+    3: {'num': 3, 'symbol': 'Li', 'name': 'Lithium', 'mass': '6.94', 'category': 'Alkali Metal', 'config': '[He] 2s¹', 'shells': '2, 1', 'en': '0.98', 'melt': '180.54 °C', 'boil': '1342 °C', 'density': '0.534 g/cm³', 'color': '#FEE75C'},
+    4: {'num': 4, 'symbol': 'Be', 'name': 'Beryllium', 'mass': '9.0122', 'category': 'Alkaline Earth Metal', 'config': '[He] 2s²', 'shells': '2, 2', 'en': '1.57', 'melt': '1287 °C', 'boil': '2469 °C', 'density': '1.85 g/cm³', 'color': '#F47B67'},
+    5: {'num': 5, 'symbol': 'B', 'name': 'Boron', 'mass': '10.81', 'category': 'Metalloid', 'config': '[He] 2s² 2p¹', 'shells': '2, 3', 'en': '2.04', 'melt': '2076 °C', 'boil': '3927 °C', 'density': '2.34 g/cm³', 'color': '#3498DB'},
+    6: {'num': 6, 'symbol': 'C', 'name': 'Carbon', 'mass': '12.011', 'category': 'Reactive Nonmetal', 'config': '[He] 2s² 2p²', 'shells': '2, 4', 'en': '2.55', 'melt': '3550 °C', 'boil': '4027 °C', 'density': '2.267 g/cm³', 'color': '#00D166'},
+    7: {'num': 7, 'symbol': 'N', 'name': 'Nitrogen', 'mass': '14.007', 'category': 'Reactive Nonmetal', 'config': '[He] 2s² 2p³', 'shells': '2, 5', 'en': '3.04', 'melt': '-210.00 °C', 'boil': '-195.79 °C', 'density': '1.251 g/L', 'color': '#00D166'},
+    8: {'num': 8, 'symbol': 'O', 'name': 'Oxygen', 'mass': '15.999', 'category': 'Reactive Nonmetal', 'config': '[He] 2s² 2p⁴', 'shells': '2, 6', 'en': '3.44', 'melt': '-218.79 °C', 'boil': '-182.96 °C', 'density': '1.429 g/L', 'color': '#00D166'},
+    9: {'num': 9, 'symbol': 'F', 'name': 'Fluorine', 'mass': '18.998', 'category': 'Halogen', 'config': '[He] 2s² 2p⁵', 'shells': '2, 7', 'en': '3.98', 'melt': '-219.67 °C', 'boil': '-188.11 °C', 'density': '1.696 g/L', 'color': '#E91E63'},
+    10: {'num': 10, 'symbol': 'Ne', 'name': 'Neon', 'mass': '20.180', 'category': 'Noble Gas', 'config': '[He] 2s² 2p⁶', 'shells': '2, 8', 'en': 'N/A', 'melt': '-248.59 °C', 'boil': '-246.08 °C', 'density': '0.9002 g/L', 'color': '#A652BB'},
+    11: {'num': 11, 'symbol': 'Na', 'name': 'Sodium', 'mass': '22.990', 'category': 'Alkali Metal', 'config': '[Ne] 3s¹', 'shells': '2, 8, 1', 'en': '0.93', 'melt': '97.794 °C', 'boil': '882.94 °C', 'density': '0.968 g/cm³', 'color': '#FEE75C'},
+    12: {'num': 12, 'symbol': 'Mg', 'name': 'Magnesium', 'mass': '24.305', 'category': 'Alkaline Earth Metal', 'config': '[Ne] 3s²', 'shells': '2, 8, 2', 'en': '1.31', 'melt': '650 °C', 'boil': '1090 °C', 'density': '1.738 g/cm³', 'color': '#F47B67'},
+    13: {'num': 13, 'symbol': 'Al', 'name': 'Aluminium', 'mass': '26.982', 'category': 'Post-Transition Metal', 'config': '[Ne] 3s² 3p¹', 'shells': '2, 8, 3', 'en': '1.61', 'melt': '660.32 °C', 'boil': '2470 °C', 'density': '2.70 g/cm³', 'color': '#95A5A6'},
+    14: {'num': 14, 'symbol': 'Si', 'name': 'Silicon', 'mass': '28.085', 'category': 'Metalloid', 'config': '[Ne] 3s² 3p²', 'shells': '2, 8, 4', 'en': '1.90', 'melt': '1414 °C', 'boil': '3265 °C', 'density': '2.329 g/cm³', 'color': '#3498DB'},
+    15: {'num': 15, 'symbol': 'P', 'name': 'Phosphorus', 'mass': '30.974', 'category': 'Reactive Nonmetal', 'config': '[Ne] 3s² 3p³', 'shells': '2, 8, 5', 'en': '2.19', 'melt': '44.15 °C', 'boil': '280.5 °C', 'density': '1.823 g/cm³', 'color': '#00D166'},
+    16: {'num': 16, 'symbol': 'S', 'name': 'Sulfur', 'mass': '32.06', 'category': 'Reactive Nonmetal', 'config': '[Ne] 3s² 3p⁴', 'shells': '2, 8, 6', 'en': '2.58', 'melt': '115.21 °C', 'boil': '444.6 °C', 'density': '2.07 g/cm³', 'color': '#00D166'},
+    17: {'num': 17, 'symbol': 'Cl', 'name': 'Chlorine', 'mass': '35.45', 'category': 'Halogen', 'config': '[Ne] 3s² 3p⁵', 'shells': '2, 8, 7', 'en': '3.16', 'melt': '-101.5 °C', 'boil': '-34.04 °C', 'density': '3.214 g/L', 'color': '#E91E63'},
+    18: {'num': 18, 'symbol': 'Ar', 'name': 'Argon', 'mass': '39.948', 'category': 'Noble Gas', 'config': '[Ne] 3s² 3p⁶', 'shells': '2, 8, 8', 'en': 'N/A', 'melt': '-189.34 °C', 'boil': '-185.85 °C', 'density': '1.784 g/L', 'color': '#A652BB'},
+    19: {'num': 19, 'symbol': 'K', 'name': 'Potassium', 'mass': '39.098', 'category': 'Alkali Metal', 'config': '[Ar] 4s¹', 'shells': '2, 8, 8, 1', 'en': '0.82', 'melt': '63.5 °C', 'boil': '759 °C', 'density': '0.862 g/cm³', 'color': '#FEE75C'},
+    20: {'num': 20, 'symbol': 'Ca', 'name': 'Calcium', 'mass': '40.078', 'category': 'Alkaline Earth Metal', 'config': '[Ar] 4s²', 'shells': '2, 8, 8, 2', 'en': '1.00', 'melt': '842 °C', 'boil': '1484 °C', 'density': '1.55 g/cm³', 'color': '#F47B67'},
+    26: {'num': 26, 'symbol': 'Fe', 'name': 'Iron', 'mass': '55.845', 'category': 'Transition Metal', 'config': '[Ar] 3d⁶ 4s²', 'shells': '2, 8, 14, 2', 'en': '1.83', 'melt': '1538 °C', 'boil': '2862 °C', 'density': '7.874 g/cm³', 'color': '#EB459E'},
+    29: {'num': 29, 'symbol': 'Cu', 'name': 'Copper', 'mass': '63.546', 'category': 'Transition Metal', 'config': '[Ar] 3d¹⁰ 4s¹', 'shells': '2, 8, 18, 1', 'en': '1.90', 'melt': '1084.62 °C', 'boil': '2562 °C', 'density': '8.96 g/cm³', 'color': '#EB459E'},
+    30: {'num': 30, 'symbol': 'Zn', 'name': 'Zinc', 'mass': '65.38', 'category': 'Transition Metal', 'config': '[Ar] 3d¹⁰ 4s²', 'shells': '2, 8, 18, 2', 'en': '1.65', 'melt': '419.53 °C', 'boil': '907 °C', 'density': '7.14 g/cm³', 'color': '#EB459E'},
+    35: {'num': 35, 'symbol': 'Br', 'name': 'Bromine', 'mass': '79.904', 'category': 'Halogen', 'config': '[Ar] 3d¹⁰ 4s² 4p⁵', 'shells': '2, 8, 18, 7', 'en': '2.96', 'melt': '-7.2 °C', 'boil': '58.8 °C', 'density': '3.1028 g/cm³', 'color': '#E91E63'},
+    47: {'num': 47, 'symbol': 'Ag', 'name': 'Silver', 'mass': '107.87', 'category': 'Transition Metal', 'config': '[Kr] 4d¹⁰ 5s¹', 'shells': '2, 8, 18, 18, 1', 'en': '1.93', 'melt': '961.78 °C', 'boil': '2162 °C', 'density': '10.49 g/cm³', 'color': '#EB459E'},
+    53: {'num': 53, 'symbol': 'I', 'name': 'Iodine', 'mass': '126.90', 'category': 'Halogen', 'config': '[Kr] 4d¹⁰ 5s² 5p⁵', 'shells': '2, 8, 18, 18, 7', 'en': '2.66', 'melt': '113.7 °C', 'boil': '184.3 °C', 'density': '4.933 g/cm³', 'color': '#E91E63'},
+    79: {'num': 79, 'symbol': 'Au', 'name': 'Gold', 'mass': '196.97', 'category': 'Transition Metal', 'config': '[Xe] 4f¹⁴ 5d¹⁰ 6s¹', 'shells': '2, 8, 18, 32, 18, 1', 'en': '2.54', 'melt': '1064.18 °C', 'boil': '2970 °C', 'density': '19.30 g/cm³', 'color': '#FEE75C'},
+    80: {'num': 80, 'symbol': 'Hg', 'name': 'Mercury', 'mass': '200.59', 'category': 'Transition Metal', 'config': '[Xe] 4f¹⁴ 5d¹⁰ 6s²', 'shells': '2, 8, 18, 32, 18, 2', 'en': '2.00', 'melt': '-38.83 °C', 'boil': '356.73 °C', 'density': '13.534 g/cm³', 'color': '#EB459E'},
+    82: {'num': 82, 'symbol': 'Pb', 'name': 'Lead', 'mass': '207.2', 'category': 'Post-Transition Metal', 'config': '[Xe] 4f¹⁴ 5d¹⁰ 6s² 6p²', 'shells': '2, 8, 18, 32, 18, 4', 'en': '1.87', 'melt': '327.46 °C', 'boil': '1749 °C', 'density': '11.34 g/cm³', 'color': '#95A5A6'},
+    92: {'num': 92, 'symbol': 'U', 'name': 'Uranium', 'mass': '238.03', 'category': 'Actinide', 'config': '[Rn] 5f³ 6d¹ 7s²', 'shells': '2, 8, 18, 32, 21, 9, 2', 'en': '1.38', 'melt': '1132.2 °C', 'boil': '4131 °C', 'density': '19.1 g/cm³', 'color': '#9B59B6'}
+}
+
+# Lookup map for elements by symbol or name
+ELEMENT_LOOKUP = {}
+for num, data in ELEMENTS_DB.items():
+    ELEMENT_LOOKUP[data['symbol'].lower()] = data
+    ELEMENT_LOOKUP[data['name'].lower()] = data
+
+def get_element_info(query: str) -> dict:
+    """Returns element dictionary if query matches an element symbol or name, else None."""
+    if not query:
+        return None
+    q = query.strip().lower()
+    return ELEMENT_LOOKUP.get(q)
+
+def render_element_card(elem: dict) -> BytesIO:
+    """Render a high-resolution dark-mode Periodic Table Element Infographic Card PNG image."""
+    import matplotlib.patches as _patches
+    from matplotlib.figure import Figure
+    
+    fig = Figure(figsize=(9, 5.5), dpi=180)
+    fig.patch.set_facecolor('#2B2D31')
+    ax = fig.subplots()
+    ax.set_facecolor('#1E1F22')
+    ax.axis('off')
+
+    # Border
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color('#4F545C')
+        spine.set_linewidth(0.8)
+
+    badge_color = elem.get('color', '#5865F2')
+
+    # --- LEFT SIDE: Periodic Tile Box ---
+    tile_left = 0.06
+    tile_bottom = 0.28
+    tile_width = 0.32
+    tile_height = 0.58
+    
+    rect = _patches.FancyBboxPatch(
+        (tile_left, tile_bottom), tile_width, tile_height,
+        boxstyle="round,pad=0.03", facecolor='#2B2D31', edgecolor=badge_color, linewidth=2.5,
+        transform=ax.transAxes
+    )
+    ax.add_patch(rect)
+
+    # Atomic Number
+    ax.text(tile_left + 0.04, tile_bottom + tile_height - 0.08, str(elem['num']), color='#B5BAC1', fontsize=14, fontweight='bold')
+
+    # Symbol
+    ax.text(tile_left + tile_width/2, tile_bottom + tile_height/2 + 0.04, elem['symbol'], color='#FFFFFF', fontsize=38, fontweight='bold', ha='center', va='center')
+
+    # Name
+    ax.text(tile_left + tile_width/2, tile_bottom + 0.12, elem['name'], color='#FFFFFF', fontsize=12, fontweight='bold', ha='center')
+
+    # Mass
+    ax.text(tile_left + tile_width/2, tile_bottom + 0.04, elem['mass'], color='#B5BAC1', fontsize=10, ha='center')
+
+    # --- RIGHT SIDE: Detailed Atomic Properties ---
+    right_x = 0.44
+    
+    ax.text(right_x, 0.90, f"{elem['name']} ({elem['symbol']})", color='#FFFFFF', fontsize=16, fontweight='bold')
+    ax.text(right_x, 0.82, f"CATEGORY: {elem['category'].upper()}", color=badge_color, fontsize=9.5, fontweight='bold')
+    ax.axhline(0.77, color='#4F545C', linewidth=0.8, xmin=0.42, xmax=0.96)
+
+    props = [
+        ("Atomic Number:", str(elem['num'])),
+        ("Atomic Mass:", f"{elem['mass']} u"),
+        ("Electron Config:", elem.get('config', 'N/A')),
+        ("Shells (per level):", elem.get('shells', 'N/A')),
+        ("Electronegativity:", elem.get('en', 'N/A')),
+        ("Melting Point:", elem.get('melt', 'N/A')),
+        ("Boiling Point:", elem.get('boil', 'N/A')),
+        ("Density:", elem.get('density', 'N/A')),
+    ]
+
+    y_pos = 0.70
+    for label, val in props:
+        ax.text(right_x, y_pos, label, color='#B5BAC1', fontsize=9.5, fontweight='bold')
+        ax.text(right_x + 0.22, y_pos, str(val), color='#FFFFFF', fontsize=9.5, fontweight='bold')
+        y_pos -= 0.075
+
+    ax.text(0.5, 0.04, "VALENCE PERIODIC TABLE OF ELEMENTS ENGINE", color='#4E5058', fontsize=8, ha='center', fontweight='bold')
+
+    fig.tight_layout(pad=0.5)
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=180, bbox_inches='tight')
+    buf.seek(0)
+    return buf
+
+
 async def fetch_cactus_structure(molecule_name: str) -> 'BytesIO | None':
     """Fetch 2D structure PNG from NCI/NIH Cactus Chemical Identifier Resolver API.
     Works for chemical names, IUPAC names, elements ('hydrogen', 'helium'), SMILES, CAS numbers.
