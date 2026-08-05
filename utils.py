@@ -1670,4 +1670,134 @@ def generate_db_stats_chart(db_stats_data: dict, timeframe: str = "day") -> Byte
     return buf
 
 
+# ============================================================
+# MATH ENGINE & INFOGRAPHIC CARD RENDERER (/math)
+# ============================================================
+
+def fetch_wolfram_alpha(query: str) -> str:
+    """Fetch result from WolframAlpha API if WOLFRAM_ALPHA_APP_ID is set."""
+    app_id = os.getenv("WOLFRAM_ALPHA_APP_ID", "")
+    if not app_id:
+        return None
+    try:
+        url = f"http://api.wolframalpha.com/v1/result?appid={app_id}&i={urllib.parse.quote(query)}"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except Exception as e:
+        logging.warning(f"[WOLFRAM] Error fetching WolframAlpha API: {e}")
+    return None
+
+
+def solve_math_sympy(query: str):
+    """Solve math expression or equation using SymPy if available."""
+    try:
+        import sympy as sp
+        x, y, z, t = sp.symbols('x y z t')
+        q = query.strip()
+
+        if 'diff' in q or 'derivative' in q or 'd/dx' in q:
+            clean_q = q.replace('derivative of', '').replace('diff', '').replace('d/dx', '').strip()
+            expr = sp.sympify(clean_q)
+            res = sp.diff(expr, x)
+            return f"d/dx [{clean_q}] = {res}", f"\\frac{{d}}{{dx}}\\left({sp.latex(expr)}\\right) = {sp.latex(res)}"
+
+        if 'integrate' in q or 'integral' in q or 'int' in q:
+            clean_q = q.replace('integral of', '').replace('integrate', '').replace('int', '').strip()
+            expr = sp.sympify(clean_q)
+            res = sp.integrate(expr, x)
+            return f"∫ ({clean_q}) dx = {res} + C", f"\\int \\left({sp.latex(expr)}\\right) dx = {sp.latex(res)} + C"
+
+        if '=' in q or 'solve' in q:
+            clean_q = q.replace('solve', '').strip()
+            if '=' in clean_q:
+                lhs, rhs = clean_q.split('=', 1)
+                eq = sp.Eq(sp.sympify(lhs), sp.sympify(rhs))
+            else:
+                eq = sp.sympify(clean_q)
+            res = sp.solve(eq)
+            return f"Solution: x = {res}", f"x = {sp.latex(res)}"
+
+        expr = sp.sympify(q)
+        simplified = sp.simplify(expr)
+        evaluated = repr(simplified)
+        try:
+            numeric_val = float(simplified.evalf())
+            evaluated += f" ≈ {numeric_val:.6f}"
+        except Exception:
+            pass
+        return f"Result: {evaluated}", sp.latex(simplified)
+    except Exception as e:
+        logging.warning(f"[SYMPY] SymPy not available or expression error: {e}")
+        return None, None
+
+
+def render_math_card(query: str, solution_text: str, formula_tex: str = None, plot_func_str: str = None) -> BytesIO:
+    """Renders a high-resolution dark-mode Math Infographic Card PNG."""
+    from matplotlib.patches import FancyBboxPatch
+    import numpy as np
+
+    fig = plt.figure(figsize=(11, 6.5), dpi=180, facecolor='#18191C')
+    
+    # Outer Card Frame
+    card_ax = fig.add_axes([0, 0, 1, 1], facecolor='#18191C')
+    card_ax.axis('off')
+    
+    # Inner Content Box with rounded corners
+    fancy_box = FancyBboxPatch((0.03, 0.04), 0.94, 0.92, boxstyle="round,pad=0.02,rounding_size=0.03",
+                              facecolor='#2B2D31', edgecolor='#5865F2', linewidth=2.5)
+    card_ax.add_patch(fancy_box)
+    
+    # Top Banner Box
+    banner = FancyBboxPatch((0.04, 0.84), 0.92, 0.10, boxstyle="round,pad=0.01,rounding_size=0.02",
+                           facecolor='#1E1F22', edgecolor='#5865F2', linewidth=1.5)
+    card_ax.add_patch(banner)
+    
+    card_ax.text(0.07, 0.90, "MATHEMATICS & PHYSICS ENGINE", color='#5865F2', fontsize=16, fontweight='bold', va='center')
+    card_ax.text(0.07, 0.86, f"Query: {query[:65]}", color='#B5BAC1', fontsize=11, va='center')
+    
+    # Layout selection
+    if plot_func_str:
+        text_ax = fig.add_axes([0.06, 0.08, 0.44, 0.72], facecolor='#1E1F22')
+        text_ax.axis('off')
+        plot_ax = fig.add_axes([0.54, 0.10, 0.40, 0.68], facecolor='#1E1F22')
+        
+        try:
+            x_vals = np.linspace(-5, 5, 400)
+            safe_dict = {'x': x_vals, 'np': np, 'sin': np.sin, 'cos': np.cos, 'tan': np.tan, 'exp': np.exp, 'log': np.log, 'sqrt': np.sqrt, 'pi': np.pi}
+            y_vals = eval(plot_func_str, {"__builtins__": None}, safe_dict)
+            plot_ax.plot(x_vals, y_vals, color='#00D4FF', linewidth=2.5, label=f"y = {plot_func_str[:25]}")
+            plot_ax.grid(True, color='#35363C', linestyle='--', alpha=0.7)
+            plot_ax.set_facecolor('#1E1F22')
+            plot_ax.tick_params(colors='#B5BAC1')
+            for spine in plot_ax.spines.values():
+                spine.set_color('#5865F2')
+            plot_ax.legend(facecolor='#2B2D31', edgecolor='#5865F2', labelcolor='white')
+        except Exception as p_err:
+            plot_ax.text(0.5, 0.5, f"Plot unavailable:\n{p_err}", color='#FF6B6B', ha='center', va='center')
+    else:
+        text_ax = fig.add_axes([0.06, 0.08, 0.88, 0.72], facecolor='#1E1F22')
+        text_ax.axis('off')
+
+    # Inner text box frame
+    t_box = FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.01,rounding_size=0.02",
+                           facecolor='#1E1F22', edgecolor='#35363C', linewidth=1.5, transform=text_ax.transAxes)
+    text_ax.add_patch(t_box)
+
+    # Solution Text
+    text_ax.text(0.04, 0.90, "STEP-BY-STEP SOLUTION & RESULT", color='#00D26A', fontsize=12, fontweight='bold', transform=text_ax.transAxes)
+    
+    formatted_solution = solution_text.replace('\r', '')
+    text_ax.text(0.04, 0.80, formatted_solution, color='white', fontsize=10, va='top', fontfamily='monospace', transform=text_ax.transAxes, linespacing=1.5)
+
+    # Footer Watermark
+    card_ax.text(0.94, 0.06, "VALENCE MATH ENGINE • POWERED BY WOLFRAM & GEMINI", color='#72767D', fontsize=8, ha='right')
+
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=180, facecolor='#18191C', bbox_inches='tight', pad_inches=0.1)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 

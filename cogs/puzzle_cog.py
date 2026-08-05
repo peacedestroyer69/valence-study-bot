@@ -1373,17 +1373,18 @@ class PuzzleCog(commands.Cog):
                 channel = await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
 
             guild = channel.guild
-            kicked_count = 0
+            quarantined_members = []
+            solved_members = []
 
             for member in guild.members:
                 if member.bot:
                     continue
                 uid = str(member.id)
                 if uid in solved_users:
+                    solved_members.append(member)
                     continue
 
-                if member.guild_permissions.kick_members:
-                    continue
+                quarantined_members.append(member)
 
                 udata = data.get("users", {}).get(uid, {})
                 hours_today = udata.get("total_seconds_today", 0) / 3600
@@ -1429,21 +1430,40 @@ class PuzzleCog(commands.Cog):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-                kicked_count += 1
                 logging.info(f"[PUZZLE] Placed {member.display_name} on probation for unsolved puzzle")
-
                 await asyncio.sleep(1)
 
-            if kicked_count > 0:
-                await channel.send(
-                    f"🔒 **Midnight Reckoning:** {kicked_count} member{'s' if kicked_count > 1 else ''} "
-                    f"got placed on **PROBATION / LOCKOUT** for not solving today's puzzle. "
-                    f"Their study channels are locked until they verify with `/verify`!"
+            # ANNOUNCE PUBLIC CALLOUT IN PUZZLE CHANNEL / GENERAL
+            celebrations = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
+            if quarantined_members:
+                slackers_mentions = "\n".join(f"• <@{m.id}> (0/1 solved) 🔒 **LOCKED OUT**" for m in quarantined_members)
+                solvers_mentions = "\n".join(f"• <@{m.id}> 🧠" for m in solved_members) if solved_members else "• *None! Absolute embarrassment.*"
+                
+                callout_embed = discord.Embed(
+                    title=f"💀 MIDNIGHT RECKONING — {kick_date_str}",
+                    description=(
+                        f"**{len(quarantined_members)} member{'s' if len(quarantined_members) > 1 else ''} failed to solve today's puzzle.**\n\n"
+                        f"❌ **SLACKERS PLACED ON PROBATION / LOCKOUT:**\n{slackers_mentions}\n\n"
+                        f"✅ **CHADS WHO SOLVED IT:**\n{solvers_mentions}\n\n"
+                        f"*Slackers are locked out of study channels until they solve 3 verification puzzles via `/verify` in `#general`!*"
+                    ),
+                    color=0xED4245,
                 )
+                if channel:
+                    await channel.send(embed=callout_embed)
+                if celebrations and celebrations.id != channel.id:
+                    await celebrations.send(embed=callout_embed)
             else:
-                await channel.send(
-                    "✅ **Everyone solved today's puzzle!** Impressive. New puzzle drops at 8 AM tomorrow."
-                )
+                if solved_members:
+                    perfect_embed = discord.Embed(
+                        title="🏆 PERFECT DAY — ALL PUZZLES SOLVED!",
+                        description=f"Everyone ({len(solved_members)} members) solved today's puzzle! Impressive. New puzzle drops at 8 AM tomorrow.",
+                        color=0x57F287,
+                    )
+                    if channel:
+                        await channel.send(embed=perfect_embed)
+                    if celebrations and celebrations.id != channel.id:
+                        await celebrations.send(embed=perfect_embed)
 
             logging.info(f"[PUZZLE] Midnight kick done — kicked {kicked_count} members")
 

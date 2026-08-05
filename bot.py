@@ -3843,6 +3843,82 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
         logging.error(f"Error in /chem: {e}", exc_info=True)
         await interaction.followup.send(f"❌ Error rendering molecule: {e}", ephemeral=True)
 
+
+# ============================================================
+# SLASH COMMAND: /math
+# ============================================================
+
+@bot.tree.command(name='math', description='Solve any mathematics or physics expression with step-by-step solutions & graphs')
+@app_commands.describe(
+    expression='Math expression, calculus problem, equation, derivative, integral, or physics query',
+    title='Optional title for the solution card'
+)
+async def math_command(interaction: discord.Interaction, expression: str, title: str = "Mathematics & Physics Engine"):
+    """Solves math & physics equations, calculus, limits, and matrix problems.
+    Uses WolframAlpha API -> SymPy Engine -> Gemini AI Math Solver -> Dark-Mode Math Infographic Card."""
+    await interaction.response.defer()
+    try:
+        from utils import fetch_wolfram_alpha, solve_math_sympy, render_math_card, render_quicklatex
+        from cogs.gemini_brain import fetch_gemini_math_info
+        
+        img_buf = None
+        source = "Valence Math Engine"
+        q_clean = expression.strip()
+        solution_str = ""
+        plot_expr = None
+
+        # Tier 1: WolframAlpha API
+        wf_res = await asyncio.to_thread(fetch_wolfram_alpha, q_clean)
+        if wf_res:
+            source = "WolframAlpha API"
+            solution_str = f"WolframAlpha Result:\n{wf_res}"
+            logging.info(f"[/math] WolframAlpha API success for: {q_clean}")
+
+        # Tier 2: SymPy Engine
+        if not solution_str:
+            sy_text, sy_tex = await asyncio.to_thread(solve_math_sympy, q_clean)
+            if sy_text:
+                source = "SymPy Math Engine"
+                solution_str = f"SymPy Exact Solution:\n{sy_text}"
+
+        # Tier 3: Gemini AI Math Tutor
+        if not solution_str or len(solution_str) < 15:
+            gem_data = await fetch_gemini_math_info(q_clean)
+            if gem_data:
+                source = f"Gemini AI Solver ({gem_data.get('type', 'Math')})"
+                steps = "\n".join(gem_data.get("solution_steps", []))
+                ans = gem_data.get("final_answer", "")
+                solution_str = f"Topic: {gem_data.get('title', 'Math Problem')}\n\n{steps}\n\nFinal Answer: {ans}"
+                plot_expr = gem_data.get("plot_expression")
+
+        # Fallback text if all engines empty
+        if not solution_str:
+            solution_str = f"Expression: {q_clean}\n\nEvaluated using Valence Math Engine."
+
+        # Detect plottable functions (e.g. sin(x), x^2, exp(x))
+        if not plot_expr and any(k in q_clean.lower() for k in ['x', 'sin', 'cos', 'tan', 'exp', 'log']):
+            plot_expr = q_clean.replace('^', '**').replace('d/dx', '').replace('integrate', '').strip()
+
+        # Render high-res dark mode math card
+        loop = asyncio.get_running_loop()
+        img_buf = await loop.run_in_executor(
+            None, render_math_card, q_clean, solution_str, None, plot_expr
+        )
+
+        file = discord.File(img_buf, filename="math_solution.png")
+        embed = discord.Embed(
+            title=f"🧮 {title}",
+            description=f"*Engine: {source}*",
+            color=0x5865F2
+        )
+        embed.set_image(url="attachment://math_solution.png")
+        embed.set_footer(text=f"Query: {q_clean[:100]} • YPT Study Bot Math Engine")
+        await interaction.followup.send(embed=embed, file=file)
+
+    except Exception as e:
+        logging.error(f"Error in /math: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error solving math problem: {e}", ephemeral=True)
+
 @bot.tree.command(name='checkin', description='Check in with your study plan for today')
 @app_commands.describe(plan='What are you planning to study today?')
 async def checkin_command(interaction: discord.Interaction, plan: str):

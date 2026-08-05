@@ -1826,3 +1826,30 @@ Return ONLY a raw valid JSON object with NO markdown backticks, matching this ex
     except Exception as e:
         logging.warning(f"[GEMINI CHEM INFO] Failed for '{term}': {e}")
         return None
+
+async def fetch_gemini_math_info(query: str) -> dict:
+    """Uses Gemini AI to solve any math, calculus, algebra, geometry, or physics problem step-by-step."""
+    try:
+        prompt = f"""Solve this mathematics/physics problem step-by-step for a top JEE student: '{query}'.
+Return ONLY a raw valid JSON object with NO markdown backticks, matching this exact schema:
+{{
+    "title": "Topic or Problem Title",
+    "type": "Math Category (e.g. Calculus, Algebra, Linear Algebra, Trigonometry, Mechanics)",
+    "solution_steps": [
+        "Step 1: ...",
+        "Step 2: ...",
+        "Step 3: ..."
+    ],
+    "final_answer": "Final exact answer",
+    "latex_formula": "Key LaTeX formula representing the final answer or main step",
+    "plot_expression": "Optional numpy plottable expression in x like np.sin(x)*np.exp(-x/5) or None"
+}}"""
+        resp = await ask_gemini(prompt)
+        if not resp:
+            return None
+        cleaned = re.sub(r'```json\s*|\s*```', '', resp).strip()
+        data = json.loads(cleaned)
+        return data
+    except Exception as e:
+        logging.warning(f"[GEMINI MATH INFO] Failed for '{query}': {e}")
+        return None
