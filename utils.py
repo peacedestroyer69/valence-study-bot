@@ -994,12 +994,63 @@ for num, data in _SUPERHEAVY_ELEMENTS.items():
     ELEMENT_LOOKUP[str(num)] = data
 
 
+SYSTEMATIC_DIGITS = {
+    '0': ('nil', 'n'), '1': ('un', 'u'), '2': ('bi', 'b'), '3': ('tri', 't'), '4': ('quad', 'q'),
+    '5': ('pent', 'p'), '6': ('hex', 'h'), '7': ('sept', 's'), '8': ('oct', 'o'), '9': ('enn', 'e')
+}
+SYSTEMATIC_NAMES_MAP = {
+    'nil': '0', 'un': '1', 'bi': '2', 'tri': '3', 'quad': '4',
+    'pent': '5', 'hex': '6', 'sept': '7', 'oct': '8', 'enn': '9'
+}
+
+def parse_systematic_element(query: str) -> dict:
+    """Parses atomic numbers like '121' or systematic IUPAC names like 'Unbiunium' into element details."""
+    import re as _re_sys
+    q = query.strip().lower()
+
+    if q.isdigit():
+        num = int(q)
+        num_str = str(num)
+        name_parts, sym_parts = [], []
+        for d in num_str:
+            sy_name, sy_sym = SYSTEMATIC_DIGITS[d]
+            name_parts.append(sy_name)
+            sym_parts.append(sy_sym)
+        full_name = "".join(name_parts) + "ium"
+        full_name = full_name.capitalize().replace('biium', 'bium').replace('triium', 'trium').replace('ennnil', 'enil')
+        symbol = "".join(sym_parts).capitalize()
+        return {
+            'num': num,
+            'symbol': symbol,
+            'name': full_name,
+            'mass': f"{int(num * 2.5)} (pred.)",
+            'category': 'Superheavy Element (Hypothetical)',
+            'config': f'[Og] 8s² ...',
+            'shells': f'2, 8, 18, 32, {min(32, max(1, num-60))}, {max(1, num-118)}',
+            'en': 'N/A', 'melt': 'Predicted', 'boil': 'Predicted', 'density': 'Predicted',
+            'color': '#F47B67', 'group': f'Element {num}', 'period': f'Period {8 if num >= 119 else 7}'
+        }
+
+    if q.endswith('ium') or len(q) <= 4:
+        stem = q[:-3] if q.endswith('ium') else q
+        roots = _re_sys.findall(r'nil|un|bi|tri|quad|pent|hex|sept|oct|enn', stem)
+        if roots:
+            num_str = "".join(SYSTEMATIC_NAMES_MAP[r] for r in roots)
+            if num_str.isdigit():
+                return parse_systematic_element(num_str)
+    return None
+
+
 def get_element_info(query: str) -> dict:
-    """Returns element dictionary if query matches an element symbol, name, or atomic number (1-120+)."""
+    """Returns element dictionary if query matches an element symbol, name, or atomic number (1-999+)."""
     if not query:
         return None
     q = query.strip().lower()
-    return ELEMENT_LOOKUP.get(q)
+    match = ELEMENT_LOOKUP.get(q)
+    if match:
+        return match
+    # Fallback to Universal Systematic IUPAC Element Parser
+    return parse_systematic_element(q)
 
 def render_element_card(elem: dict) -> BytesIO:
     """Render a stunning, premium, publication-quality Periodic Table Element Infographic Card with Bohr orbital diagram."""
