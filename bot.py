@@ -1999,8 +1999,8 @@ async def on_message(message: discord.Message):
     if message.guild and isinstance(message.author, discord.Member):
         uid_str = str(message.author.id)
         data = await load_data()
-        udata = data.get("users", {}).get(uid_str, {})
-        if udata.get("quarantined"):
+        has_locked_role = any(r.name == "Locked Out" for r in message.author.roles)
+        if udata.get("quarantined") or has_locked_role:
             # Allow messaging ONLY in #general and #bot-command so they can use /verify and talk to admins
             allowed_ids = {GENERAL_CHANNEL_ID}
             ch_name = message.channel.name.lower() if hasattr(message.channel, 'name') else ""

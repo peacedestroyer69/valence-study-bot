@@ -1865,7 +1865,7 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
 
 
 async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout") -> tuple[bool, str]:
-    """Adds the 'Locked Out' role to member and disconnects them from non-general voice channels."""
+    """Adds the 'Locked Out' role to member, strips member roles, and disconnects them from non-general voice channels."""
     guild = member.guild
     role = discord.utils.get(guild.roles, name="Locked Out")
     if not role:
@@ -1880,6 +1880,17 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
             return False, f"Could not create 'Locked Out' role: {e}"
 
     if role:
+        # Strip other member roles to prevent Discord permission ALLOW overrides
+        roles_to_remove = [
+            r for r in member.roles 
+            if not r.is_default() and not r.managed and r != role and r.position < guild.me.top_role.position
+        ]
+        if roles_to_remove:
+            try:
+                await member.remove_roles(*roles_to_remove, reason=f"Quarantine lockout — stripping member roles: {reason}")
+            except Exception as r_err:
+                logging.warning(f"[QUARANTINE] Could not strip member roles from {member.display_name}: {r_err}")
+
         if role not in member.roles:
             try:
                 await member.add_roles(role, reason=reason)
@@ -1902,7 +1913,7 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
             except Exception:
                 pass
 
-    return True, "Locked Out role assigned successfully."
+    return True, "Locked Out role assigned and member roles stripped successfully."
 
 
 async def sync_channel_lockout_permissions(guild: discord.Guild) -> int:
