@@ -1793,20 +1793,30 @@ def solve_math_sympy(query: str):
         x, y, z, t = sp.symbols('x y z t')
         q = query.strip()
 
+        # Helper to insert implicit multiplication (e.g. 5x -> 5*x, 3( -> 3*()
+        def _clean_expr(expr_s: str) -> str:
+            s = expr_s.replace('^', '**').strip()
+            s = re.sub(r'(\d)([a-zA-Z\(])', r'\1*\2', s)
+            s = re.sub(r'(\))(\d|[a-zA-Z])', r'\1*\2', s)
+            return s
+
         if 'diff' in q or 'derivative' in q or 'd/dx' in q:
-            clean_q = re.sub(r'derivative of|diff|d/dx|\bd[xytz]\b', '', q, flags=re.IGNORECASE).replace('^', '**').strip()
+            clean_q = re.sub(r'derivative of|diff|d/dx|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
+            clean_q = _clean_expr(clean_q)
             expr = sp.sympify(clean_q)
             res = sp.diff(expr, x)
             return f"d/dx [{clean_q}] = {res}", f"\\frac{{d}}{{dx}}\\left({sp.latex(expr)}\\right) = {sp.latex(res)}"
 
         if 'integrate' in q or 'integral' in q or 'int' in q:
-            clean_q = re.sub(r'integral of|integrate|int|\bd[xytz]\b', '', q, flags=re.IGNORECASE).replace('^', '**').strip()
+            clean_q = re.sub(r'integral of|integrate|int|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
+            clean_q = _clean_expr(clean_q)
             expr = sp.sympify(clean_q)
             res = sp.integrate(expr, x)
             return f"∫ ({clean_q}) dx = {res} + C", f"\\int \\left({sp.latex(expr)}\\right) dx = {sp.latex(res)} + C"
 
         if '=' in q or 'solve' in q:
-            clean_q = q.replace('solve', '').replace('^', '**').strip()
+            clean_q = q.replace('solve', '').strip()
+            clean_q = _clean_expr(clean_q)
             if '=' in clean_q:
                 lhs, rhs = clean_q.split('=', 1)
                 eq = sp.Eq(sp.sympify(lhs), sp.sympify(rhs))
@@ -1815,7 +1825,7 @@ def solve_math_sympy(query: str):
             res = sp.solve(eq)
             return f"Solution: x = {res}", f"x = {sp.latex(res)}"
 
-        clean_q = q.replace('^', '**').strip()
+        clean_q = _clean_expr(q)
         expr = sp.sympify(clean_q)
         simplified = sp.simplify(expr)
         evaluated = repr(simplified)
@@ -1828,7 +1838,25 @@ def solve_math_sympy(query: str):
     except Exception as e:
         logging.warning(f"[SYMPY] SymPy not available or expression error: {e}")
         return None, None
-        return None, None
+
+
+def prepare_plot_expression(expr_str: str) -> 'str | None':
+    """Cleans and validates plot function string for Matplotlib eval."""
+    if not expr_str:
+        return None
+    import re
+    s = expr_str.strip()
+    if '=' in s:
+        if s.lower().startswith('y ='):
+            s = s.split('=', 1)[1].strip()
+        elif s.lower().startswith('f(x) ='):
+            s = s.split('=', 1)[1].strip()
+        else:
+            return None
+    s = s.replace('^', '**')
+    s = re.sub(r'(\d)([a-zA-Z\(])', r'\1*\2', s)
+    s = re.sub(r'(\))(\d|[a-zA-Z])', r'\1*\2', s)
+    return s
 
 
 def render_math_card(query: str, solution_text: str, formula_tex: str = None, plot_func_str: str = None) -> BytesIO:
@@ -1854,11 +1882,15 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
                            facecolor='#1E1F22', edgecolor='#5865F2', linewidth=1.5)
     card_ax.add_patch(banner)
     
+    clean_query = query.replace('$$', '').replace('$', '')
     card_ax.text(0.07, 0.90, "MATHEMATICS & PHYSICS ENGINE", color='#5865F2', fontsize=16, fontweight='bold', va='center')
-    card_ax.text(0.07, 0.86, f"Query: {query[:65]}", color='#B5BAC1', fontsize=11, va='center')
+    card_ax.text(0.07, 0.86, f"Query: {clean_query[:65]}", color='#B5BAC1', fontsize=11, va='center')
     
+    # Prepare plottable function
+    valid_plot_str = prepare_plot_expression(plot_func_str)
+
     # Layout selection
-    if plot_func_str:
+    if valid_plot_str:
         text_ax = fig.add_axes([0.06, 0.08, 0.44, 0.72], facecolor='#1E1F22')
         text_ax.axis('off')
         plot_ax = fig.add_axes([0.54, 0.10, 0.40, 0.68], facecolor='#1E1F22')
@@ -1866,8 +1898,8 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
         try:
             x_vals = np.linspace(-5, 5, 400)
             safe_dict = {'x': x_vals, 'np': np, 'sin': np.sin, 'cos': np.cos, 'tan': np.tan, 'exp': np.exp, 'log': np.log, 'sqrt': np.sqrt, 'pi': np.pi}
-            y_vals = eval(plot_func_str, {"__builtins__": None}, safe_dict)
-            plot_ax.plot(x_vals, y_vals, color='#00D4FF', linewidth=2.5, label=f"y = {plot_func_str[:25]}")
+            y_vals = eval(valid_plot_str, {"__builtins__": None}, safe_dict)
+            plot_ax.plot(x_vals, y_vals, color='#00D4FF', linewidth=2.5, label=f"y = {valid_plot_str[:25]}")
             plot_ax.grid(True, color='#35363C', linestyle='--', alpha=0.7)
             plot_ax.set_facecolor('#1E1F22')
             plot_ax.tick_params(colors='#B5BAC1')
@@ -1888,7 +1920,7 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
     # Solution Text
     text_ax.text(0.04, 0.90, "STEP-BY-STEP SOLUTION & RESULT", color='#00D26A', fontsize=12, fontweight='bold', transform=text_ax.transAxes)
     
-    formatted_solution = solution_text.replace('\r', '')
+    formatted_solution = solution_text.replace('$$', '').replace('$', '').replace('\r', '')
     text_ax.text(0.04, 0.80, formatted_solution, color='white', fontsize=10, va='top', fontfamily='monospace', transform=text_ax.transAxes, linespacing=1.5)
 
     # Footer Watermark
