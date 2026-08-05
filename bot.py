@@ -4264,6 +4264,63 @@ async def sync_roles_command(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
+@bot.tree.command(name='test_lockout', description='Admin test command to lock out a user for testing')
+@app_commands.describe(
+    user='The member to lock out for testing',
+    reason='Optional reason for testing'
+)
+async def test_lockout_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin lockout test"):
+    """Admin command to test placing any member into probation/lockout."""
+    is_admin = (
+        interaction.user.guild_permissions.administrator or
+        interaction.user.guild_permissions.manage_guild or
+        interaction.user.id in (VALENCE_ID, UJJWAL_ID)
+    )
+    if not is_admin:
+        await interaction.response.send_message("❌ Only admins can execute `/test_lockout`.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    async with bot.db_write_lock:
+        data = await load_data()
+        uid = str(user.id)
+        udata = ensure_user(data, user)
+        udata["quarantined"] = True
+        udata["quarantine_reason"] = reason
+        udata["quarantine_timestamp"] = int(time.time())
+        await save_data(data)
+
+    from utils import apply_quarantine_role
+    await apply_quarantine_role(user, reason=f"Lockout test by {interaction.user.display_name}")
+
+    try:
+        embed = discord.Embed(
+            title="🔒 PROBATION / LOCKED OUT — TEST",
+            description=(
+                f"You have been placed on **TEST PROBATION** by **{interaction.user.display_name}**.\n\n"
+                f"**Reason:** {reason}\n"
+                f"Your study channel access has been locked and the **`Locked Out`** role was assigned."
+            ),
+            color=0xED4245
+        )
+        await user.send(embed=embed)
+    except Exception:
+        pass
+
+    res_embed = discord.Embed(
+        title="🔒 Lockout Test Applied",
+        description=(
+            f"Successfully locked out **{user.display_name}** (<@{user.id}>) for testing!\n"
+            f"• Assigned **`Locked Out`** role.\n"
+            f"• Saved `quarantined = True` in DB.\n"
+            f"• Use `/unquarantine user:@{user.display_name}` or `/admin_override` to unlock!"
+        ),
+        color=0xED4245
+    )
+    await interaction.followup.send(embed=res_embed)
+
+
 async def main():
     await start_keepalive_server()
     
