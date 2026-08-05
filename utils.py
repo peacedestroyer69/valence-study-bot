@@ -71,13 +71,51 @@ TEXT_MILESTONE_ROLES = {50: 1514254760386236496, 200: 1514255291578056714, 500: 
 
 
 async def get_or_create_role(guild: discord.Guild, name: str, color_hex: int = 0x5865F2) -> discord.Role:
-    """Finds a role by exact or clean name, or creates it automatically if missing."""
+    """Finds a role by exact name, keyword match, or clean name, or creates it automatically if missing."""
     clean_target = name.split()[-1].lower() if len(name.split()) > 1 else name.lower()
     
+    # 1. Exact match (case-insensitive)
     for r in guild.roles:
-        if r.name.strip() == name.strip() or clean_target in r.name.lower():
+        if r.name.strip().lower() == name.strip().lower():
             return r
-            
+
+    # 2. Key-term mapping for custom server spellings (e.g. 'Dimond', 'scholar', 'Never have doubt')
+    key_terms = {
+        'bronze': ['bronze'],
+        'silver': ['silver'],
+        'gold': ['gold'],
+        'diamond': ['diamond', 'dimond'],
+        'legendary': ['legendary'],
+        'beginner': ['beginner'],
+        'explorer': ['explorer'],
+        'master': ['doubt master'],
+        'professor': ['professor'],
+        'doubt': ['doubt in life', 'never have doubt', 'never had a doubt'],
+        'learner': ['active learner'],
+        'discussion': ['discussion pro'],
+        'sharer': ['knowledge sharer'],
+        'sage': ['study sage'],
+        'weekly': ['weekly top', 'weekly scholar'],
+    }
+
+    target_key = None
+    for k in key_terms:
+        if k in name.lower():
+            target_key = k
+            break
+
+    if target_key:
+        for r in guild.roles:
+            r_lower = r.name.lower()
+            if any(term in r_lower for term in key_terms[target_key]):
+                return r
+
+    # 3. Substring fallback
+    for r in guild.roles:
+        if clean_target in r.name.lower():
+            return r
+
+    # 4. Auto-create missing role
     try:
         role = await guild.create_role(
             name=name,
