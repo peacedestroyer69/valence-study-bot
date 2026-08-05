@@ -1002,78 +1002,146 @@ def get_element_info(query: str) -> dict:
     return ELEMENT_LOOKUP.get(q)
 
 def render_element_card(elem: dict) -> BytesIO:
-    """Render a high-resolution dark-mode Periodic Table Element Infographic Card PNG image."""
+    """Render a stunning, premium, publication-quality Periodic Table Element Infographic Card with Bohr orbital diagram."""
     import matplotlib.patches as _patches
+    import numpy as _np
     from matplotlib.figure import Figure
-    
-    fig = Figure(figsize=(9, 5.5), dpi=180)
+
+    fig = Figure(figsize=(10, 6), dpi=200)
     fig.patch.set_facecolor('#2B2D31')
     ax = fig.subplots()
     ax.set_facecolor('#1E1F22')
     ax.axis('off')
 
-    # Border
+    # Border around card
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color('#4F545C')
-        spine.set_linewidth(0.8)
+        spine.set_linewidth(1.0)
 
-    badge_color = elem.get('color', '#5865F2')
+    category_colors = {
+        'Reactive Nonmetal': '#00D166',
+        'Noble Gas': '#A652BB',
+        'Alkali Metal': '#FEE75C',
+        'Alkaline Earth Metal': '#F47B67',
+        'Metalloid': '#3498DB',
+        'Halogen': '#E91E63',
+        'Transition Metal': '#EB459E',
+        'Post-Transition Metal': '#95A5A6',
+        'Lanthanide': '#9B59B6',
+        'Actinide': '#9B59B6',
+    }
+    badge_color = elem.get('color') or category_colors.get(elem.get('category', ''), '#5865F2')
 
-    # --- LEFT SIDE: Periodic Tile Box ---
-    tile_left = 0.06
-    tile_bottom = 0.28
-    tile_width = 0.32
-    tile_height = 0.58
+    # ==========================================
+    # LEFT PANE: Periodic Tile & Bohr Model
+    # ==========================================
+    tile_left = 0.05
+    tile_bottom = 0.50
+    tile_w = 0.33
+    tile_h = 0.44
     
     rect = _patches.FancyBboxPatch(
-        (tile_left, tile_bottom), tile_width, tile_height,
-        boxstyle="round,pad=0.03", facecolor='#2B2D31', edgecolor=badge_color, linewidth=2.5,
+        (tile_left, tile_bottom), tile_w, tile_h,
+        boxstyle="round,pad=0.03", facecolor='#2B2D31', edgecolor=badge_color, linewidth=2.8,
         transform=ax.transAxes
     )
     ax.add_patch(rect)
 
     # Atomic Number
-    ax.text(tile_left + 0.04, tile_bottom + tile_height - 0.08, str(elem['num']), color='#B5BAC1', fontsize=14, fontweight='bold')
+    ax.text(tile_left + 0.03, tile_bottom + tile_h - 0.06, str(elem['num']), color='#B5BAC1', fontsize=13, fontweight='bold')
 
-    # Symbol
-    ax.text(tile_left + tile_width/2, tile_bottom + tile_height/2 + 0.04, elem['symbol'], color='#FFFFFF', fontsize=38, fontweight='bold', ha='center', va='center')
+    # Element Symbol
+    ax.text(tile_left + tile_w/2, tile_bottom + tile_h/2 + 0.03, elem['symbol'], color='#FFFFFF', fontsize=36, fontweight='bold', ha='center', va='center')
 
-    # Name
-    ax.text(tile_left + tile_width/2, tile_bottom + 0.12, elem['name'], color='#FFFFFF', fontsize=12, fontweight='bold', ha='center')
+    # Element Name
+    ax.text(tile_left + tile_w/2, tile_bottom + 0.09, elem['name'], color='#FFFFFF', fontsize=11, fontweight='bold', ha='center')
 
     # Mass
-    ax.text(tile_left + tile_width/2, tile_bottom + 0.04, elem['mass'], color='#B5BAC1', fontsize=10, ha='center')
+    ax.text(tile_left + tile_w/2, tile_bottom + 0.03, f"{elem['mass']} u", color='#B5BAC1', fontsize=9.5, ha='center')
 
-    # --- RIGHT SIDE: Detailed Atomic Properties ---
-    right_x = 0.44
+    # Bohr Orbital Model Diagram (Bottom Left)
+    bohr_cx = 0.215
+    bohr_cy = 0.25
     
-    ax.text(right_x, 0.90, f"{elem['name']} ({elem['symbol']})", color='#FFFFFF', fontsize=16, fontweight='bold')
-    ax.text(right_x, 0.82, f"CATEGORY: {elem['category'].upper()}", color=badge_color, fontsize=9.5, fontweight='bold')
-    ax.axhline(0.77, color='#4F545C', linewidth=0.8, xmin=0.42, xmax=0.96)
+    nucleus = _patches.Circle((bohr_cx, bohr_cy), 0.025, color=badge_color, transform=ax.transAxes)
+    ax.add_patch(nucleus)
+    ax.text(bohr_cx, bohr_cy, elem['symbol'], color='#FFFFFF', fontsize=8, fontweight='bold', ha='center', va='center')
 
-    props = [
-        ("Atomic Number:", str(elem['num'])),
-        ("Atomic Mass:", f"{elem['mass']} u"),
-        ("Electron Config:", elem.get('config', 'N/A')),
-        ("Shells (per level):", elem.get('shells', 'N/A')),
-        ("Electronegativity:", elem.get('en', 'N/A')),
-        ("Melting Point:", elem.get('melt', 'N/A')),
-        ("Boiling Point:", elem.get('boil', 'N/A')),
-        ("Density:", elem.get('density', 'N/A')),
+    shells_str = str(elem.get('shells', '1'))
+    shell_counts = [int(s.strip()) for s in shells_str.split(',') if s.strip().isdigit()]
+    radii = [0.06, 0.095, 0.13, 0.165, 0.20][:len(shell_counts)]
+    
+    for i, (count, r) in enumerate(zip(shell_counts, radii)):
+        ring = _patches.Circle((bohr_cx, bohr_cy), r, fill=False, edgecolor='#4F545C', linestyle='--', linewidth=0.9, transform=ax.transAxes)
+        ax.add_patch(ring)
+        
+        angles = _np.linspace(0, 2*_np.pi, count, endpoint=False)
+        for angle in angles:
+            ex = bohr_cx + r * _np.cos(angle)
+            ey = bohr_cy + r * _np.sin(angle)
+            e_dot = _patches.Circle((ex, ey), 0.008, color='#00D166', transform=ax.transAxes)
+            ax.add_patch(e_dot)
+
+    ax.text(bohr_cx, 0.04, f"Bohr Model ({shells_str} e⁻)", color='#72767D', fontsize=8.5, ha='center', fontweight='bold')
+
+    ax.axvline(0.42, color='#35363C', linewidth=1.2, ymin=0.05, ymax=0.95)
+
+    # ==========================================
+    # RIGHT PANE: Detailed Data Grid
+    # ==========================================
+    right_x = 0.45
+    
+    ax.text(right_x, 0.91, f"{elem['name']} ({elem['symbol']})", color='#FFFFFF', fontsize=18, fontweight='bold')
+    
+    pill_rect = _patches.FancyBboxPatch(
+        (right_x, 0.83), 0.32, 0.05,
+        boxstyle="round,pad=0.02", facecolor=badge_color, edgecolor='none', alpha=0.85,
+        transform=ax.transAxes
+    )
+    ax.add_patch(pill_rect)
+    ax.text(right_x + 0.16, 0.855, elem['category'].upper(), color='#1E1F22', fontsize=8.5, fontweight='bold', ha='center', va='center')
+
+    group_tag = elem.get('group', 'Group')
+    period_tag = elem.get('period', 'Period')
+    ax.text(right_x + 0.35, 0.855, f"{group_tag} • {period_tag}", color='#B5BAC1', fontsize=9, fontweight='bold', va='center')
+
+    ax.axhline(0.80, color='#4F545C', linewidth=0.8, xmin=0.44, xmax=0.96)
+
+    col1_x = right_x
+    col2_x = right_x + 0.27
+
+    props_col1 = [
+        ("Atomic Number", str(elem['num'])),
+        ("Atomic Mass", f"{elem['mass']} u"),
+        ("Electron Config", elem.get('config', 'N/A')),
+        ("Oxidation States", elem.get('ox', 'N/A')),
+        ("Electronegativity", elem.get('en', 'N/A')),
     ]
 
-    y_pos = 0.70
-    for label, val in props:
-        ax.text(right_x, y_pos, label, color='#B5BAC1', fontsize=9.5, fontweight='bold')
-        ax.text(right_x + 0.22, y_pos, str(val), color='#FFFFFF', fontsize=9.5, fontweight='bold')
-        y_pos -= 0.075
+    props_col2 = [
+        ("Melting Point", elem.get('melt', 'N/A')),
+        ("Boiling Point", elem.get('boil', 'N/A')),
+        ("Density", elem.get('density', 'N/A')),
+        ("Atomic Radius", elem.get('radius', 'N/A')),
+        ("State at 20°C", elem.get('state', 'N/A')),
+    ]
 
-    ax.text(0.5, 0.04, "VALENCE PERIODIC TABLE OF ELEMENTS ENGINE", color='#4E5058', fontsize=8, ha='center', fontweight='bold')
+    y_pos = 0.72
+    for (label1, val1), (label2, val2) in zip(props_col1, props_col2):
+        ax.text(col1_x, y_pos, label1, color='#72767D', fontsize=8.5, fontweight='bold')
+        ax.text(col1_x, y_pos - 0.038, str(val1), color='#FFFFFF', fontsize=9.5, fontweight='bold')
+
+        ax.text(col2_x, y_pos, label2, color='#72767D', fontsize=8.5, fontweight='bold')
+        ax.text(col2_x, y_pos - 0.038, str(val2), color='#FFFFFF', fontsize=9.5, fontweight='bold')
+
+        y_pos -= 0.11
+
+    ax.text(0.5, 0.02, "VALENCE PERIODIC TABLE & ATOMIC STRUCTURE ENGINE • POWERED BY PTABLE.COM", color='#4E5058', fontsize=7.5, ha='center', fontweight='bold')
 
     fig.tight_layout(pad=0.5)
     buf = BytesIO()
-    fig.savefig(buf, format='png', dpi=180, bbox_inches='tight')
+    fig.savefig(buf, format='png', dpi=200, bbox_inches='tight')
     buf.seek(0)
     return buf
 
