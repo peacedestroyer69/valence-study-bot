@@ -2001,8 +2001,8 @@ async def on_message(message: discord.Message):
         data = await load_data()
         udata = data.get("users", {}).get(uid_str, {})
         if udata.get("quarantined"):
-            # Allow messaging in #general, #general-meet, #bot-command so they can use /verify and talk to admins
-            allowed_ids = {GENERAL_CHANNEL_ID, STUDY_TEXT_CHANNEL_ID}
+            # Allow messaging ONLY in #general and #bot-command so they can use /verify and talk to admins
+            allowed_ids = {GENERAL_CHANNEL_ID}
             ch_name = message.channel.name.lower() if hasattr(message.channel, 'name') else ""
             if message.channel.id not in allowed_ids and "general" not in ch_name and "bot-command" not in ch_name:
                 try:
@@ -2011,7 +2011,7 @@ async def on_message(message: discord.Message):
                     pass
                 try:
                     await message.channel.send(
-                        f"🔒 <@{message.author.id}> **Access Denied**: You are currently locked out of study channels due to missed study days/puzzles. "
+                        f"🔒 <@{message.author.id}> **Access Denied**: You are currently locked out of server channels due to missed study days/puzzles. "
                         f"You can chat in `#general` or use `/verify` to restore your full access!",
                         delete_after=10
                     )
@@ -2610,6 +2610,19 @@ async def on_ready():
 
     except Exception as sync_err:
         logging.error(f"Failed to sync application commands: {sync_err}")
+
+    # Startup Audit: Auto-assign 'Locked Out' role to any quarantined users upon startup
+    try:
+        from utils import apply_quarantine_role
+        data = await load_data()
+        for guild in bot.guilds:
+            for uid, udata in data.get("users", {}).items():
+                if udata.get("quarantined"):
+                    member = guild.get_member(int(uid))
+                    if member and not member.bot:
+                        await apply_quarantine_role(member, reason="Startup quarantine audit sync")
+    except Exception as audit_err:
+        logging.warning(f"Startup quarantine audit error: {audit_err}")
 
     logging.info("Bot ready. All systems operational.")
 
@@ -4187,20 +4200,24 @@ async def setup_locked_out_permissions_command(interaction: discord.Interaction)
                     reason="Allow general access for Locked Out role"
                 )
             else:
-                # Deny access in study/doubt channels
-                if isinstance(channel, discord.TextChannel):
+                # Total lockdown on all other channels (study, doubt, celebrations, voice, categories, threads)
+                if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
                     await channel.set_permissions(
                         role,
                         view_channel=False,
                         send_messages=False,
-                        reason="Lock out study text channel"
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        reason="Total lockdown text channel & threads"
                     )
                 elif isinstance(channel, discord.VoiceChannel):
                     await channel.set_permissions(
                         role,
                         view_channel=False,
                         connect=False,
-                        reason="Lock out study voice channel"
+                        speak=False,
+                        reason="Total lockdown voice channel"
                     )
                 elif isinstance(channel, discord.CategoryChannel):
                     await channel.set_permissions(
@@ -4208,7 +4225,10 @@ async def setup_locked_out_permissions_command(interaction: discord.Interaction)
                         view_channel=False,
                         send_messages=False,
                         connect=False,
-                        reason="Lock out study category"
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        reason="Total lockdown category"
                     )
             updated_count += 1
         except Exception as err:
