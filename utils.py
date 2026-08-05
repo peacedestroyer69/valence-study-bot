@@ -1823,7 +1823,11 @@ def solve_math_sympy(query: str):
             else:
                 eq = sp.sympify(clean_q)
             res = sp.solve(eq)
-            return f"Solution: x = {res}", f"x = {sp.latex(res)}"
+            if isinstance(res, list):
+                res_str = ", ".join(str(val) for val in res)
+            else:
+                res_str = str(res)
+            return f"Solution: x = {res_str}", f"x = {sp.latex(res)}"
 
         clean_q = _clean_expr(q)
         expr = sp.sympify(clean_q)
