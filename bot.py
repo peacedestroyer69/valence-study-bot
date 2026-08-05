@@ -4292,7 +4292,20 @@ async def test_lockout_command(interaction: discord.Interaction, user: discord.M
         await save_data(data)
 
     from utils import apply_quarantine_role
-    await apply_quarantine_role(user, reason=f"Lockout test by {interaction.user.display_name}")
+    role_ok, role_msg = await apply_quarantine_role(user, reason=f"Lockout test by {interaction.user.display_name}")
+
+    if not role_ok:
+        res_embed = discord.Embed(
+            title="⚠️ Lockout Role Assignment Failed",
+            description=(
+                f"DB quarantine set to `quarantined = True`, BUT Discord role assignment failed!\n\n"
+                f"**Diagnostic Error:**\n`{role_msg}`\n\n"
+                f"📌 **Fix**: Go to **Discord Server Settings -> Roles** and drag **`YPT Study Bot`** above **`Locked Out`** and above **{user.display_name}**'s highest role!"
+            ),
+            color=0xFEE75C
+        )
+        await interaction.followup.send(embed=res_embed)
+        return
 
     try:
         embed = discord.Embed(
@@ -4309,14 +4322,14 @@ async def test_lockout_command(interaction: discord.Interaction, user: discord.M
         pass
 
     res_embed = discord.Embed(
-        title="🔒 Lockout Test Applied",
+        title="🔒 Lockout Test Applied Successfully",
         description=(
             f"Successfully locked out **{user.display_name}** (<@{user.id}>) for testing!\n"
             f"• Assigned **`Locked Out`** role.\n"
             f"• Saved `quarantined = True` in DB.\n"
             f"• Use `/unquarantine user:@{user.display_name}` or `/admin_override` to unlock!"
         ),
-        color=0xED4245
+        color=0x57F287
     )
     await interaction.followup.send(embed=res_embed)
 

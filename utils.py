@@ -1864,7 +1864,7 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
     return buf
 
 
-async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout"):
+async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout") -> tuple[bool, str]:
     """Adds the 'Locked Out' role to member and disconnects them from non-general voice channels."""
     guild = member.guild
     role = discord.utils.get(guild.roles, name="Locked Out")
@@ -1877,14 +1877,21 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
             )
         except Exception as e:
             logging.error(f"[QUARANTINE] Could not create 'Locked Out' role: {e}")
-            role = None
+            return False, f"Could not create 'Locked Out' role: {e}"
 
-    if role and role not in member.roles:
-        try:
-            await member.add_roles(role, reason=reason)
-            logging.info(f"[QUARANTINE] Assigned 'Locked Out' role to {member.display_name}")
-        except Exception as e:
-            logging.error(f"[QUARANTINE] Failed assigning 'Locked Out' role to {member.display_name}: {e}")
+    if role:
+        if role not in member.roles:
+            try:
+                await member.add_roles(role, reason=reason)
+                logging.info(f"[QUARANTINE] Assigned 'Locked Out' role to {member.display_name}")
+            except discord.Forbidden:
+                err_msg = f"Discord hierarchy error: 'YPT Study Bot' role position is lower than {member.display_name}'s highest role in Server Settings -> Roles."
+                logging.error(f"[QUARANTINE] {err_msg}")
+                return False, err_msg
+            except Exception as e:
+                err_msg = f"Failed assigning 'Locked Out' role: {e}"
+                logging.error(f"[QUARANTINE] {err_msg}")
+                return False, err_msg
 
     # Move out of voice channel if in non-general voice
     if member.voice and member.voice.channel:
@@ -1894,6 +1901,8 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
                 await member.move_to(None)
             except Exception:
                 pass
+
+    return True, "Locked Out role assigned successfully."
 
 
 async def remove_quarantine_role(member: discord.Member, reason: str = "Unlocked"):
