@@ -4109,11 +4109,6 @@ async def shutdown(sig=None):
 # SLASH COMMANDS: /admin_override & /unquarantine
 # ============================================================
 
-@bot.tree.command(name='admin_override', description='Unlock a user from probation/quarantine and reset their strikes to 0')
-@app_commands.describe(
-    user='The member to unlock from probation/lockout',
-    reason='Optional reason for override'
-)
 async def _execute_admin_override(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
     """Helper function to perform admin override / unquarantine."""
     is_admin = (
