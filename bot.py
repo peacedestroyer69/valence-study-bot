@@ -4141,6 +4141,85 @@ async def unquarantine_command(interaction: discord.Interaction, user: discord.M
     await admin_override_command(interaction, user, reason)
 
 
+@bot.tree.command(name='setup_locked_out_permissions', description='Bulk configure server channel permissions for the Locked Out role')
+async def setup_locked_out_permissions_command(interaction: discord.Interaction):
+    """Admin command to automatically set permission overrides for the 'Locked Out' role across all server channels."""
+    is_admin = (
+        interaction.user.guild_permissions.administrator or
+        interaction.user.guild_permissions.manage_guild or
+        interaction.user.id in (VALENCE_ID, UJJWAL_ID)
+    )
+    if not is_admin:
+        await interaction.response.send_message("❌ Only admins can execute this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    guild = interaction.guild
+    if not guild:
+        await interaction.followup.send("❌ Must be run in a server.", ephemeral=True)
+        return
+
+    role = discord.utils.get(guild.roles, name="Locked Out")
+    if not role:
+        role = await guild.create_role(
+            name="Locked Out",
+            color=discord.Color.from_rgb(120, 120, 120),
+            reason="Auto-created quarantine lockout role"
+        )
+
+    updated_count = 0
+    for channel in guild.channels:
+        try:
+            ch_name = channel.name.lower()
+            if channel.id == GENERAL_CHANNEL_ID or "general" in ch_name or "bot-command" in ch_name:
+                # Allow access in general/bot-commands
+                await channel.set_permissions(
+                    role,
+                    view_channel=True,
+                    send_messages=True,
+                    connect=True,
+                    reason="Allow general access for Locked Out role"
+                )
+            else:
+                # Deny access in study/doubt channels
+                if isinstance(channel, discord.TextChannel):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        send_messages=False,
+                        reason="Lock out study text channel"
+                    )
+                elif isinstance(channel, discord.VoiceChannel):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        connect=False,
+                        reason="Lock out study voice channel"
+                    )
+                elif isinstance(channel, discord.CategoryChannel):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        send_messages=False,
+                        connect=False,
+                        reason="Lock out study category"
+                    )
+            updated_count += 1
+        except Exception as err:
+            logging.warning(f"Could not set permission override for #{channel.name}: {err}")
+
+    embed = discord.Embed(
+        title="🔒 Locked Out Permissions Setup Complete",
+        description=(
+            f"Successfully updated permission overrides for **{updated_count}** channels/categories!\n\n"
+            f"• **`#general` & `#bot-command`**: Allowed View & Send Messages\n"
+            f"• **All Study Channels & Categories**: Denied View, Send Messages, & Connect"
+        ),
+        color=0x57F287
+    )
+    await interaction.followup.send(embed=embed)
+
+
 async def main():
     await start_keepalive_server()
     
