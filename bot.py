@@ -3773,30 +3773,37 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
 
         file = discord.File(img_buf, filename="molecule.png")
         
-        # Check if query is an element or element-related query to provide ptable.com link
+        # Check if query is an element query to provide ptable.com link & button ONLY for elements
         elem_match = get_element_info(mol_clean)
-        ptable_url = "https://ptable.com/#"
+        
         if elem_match:
             ptable_url = f"https://ptable.com/#Property/State/{elem_match['name']}"
+            embed = discord.Embed(
+                title="🧪 Chemistry Render",
+                description=f"*Engine: {source}*\n🔗 **[Interactive Periodic Table (Ptable.com)]({ptable_url})**",
+                color=0x00D166
+            )
+            embed.set_image(url="attachment://molecule.png")
+            embed.set_footer(text=f"Input: {molecule[:100]} • Powered by Ptable & Valence Chemistry")
 
-        embed = discord.Embed(
-            title="🧪 Chemistry Render",
-            description=f"*Engine: {source}*\n🔗 **[Interactive Periodic Table (Ptable.com)]({ptable_url})**",
-            color=0x00D166
-        )
-        embed.set_image(url="attachment://molecule.png")
-        embed.set_footer(text=f"Input: {molecule[:100]} • Powered by Ptable & Valence Chemistry")
-
-        # Create Discord UI Link Button to ptable.com
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            label="🌐 Open Interactive Periodic Table (Ptable.com)",
-            url=ptable_url,
-            style=discord.ButtonStyle.link,
-            emoji="⚛️"
-        ))
-
-        await interaction.followup.send(embed=embed, file=file, view=view)
+            # Create Discord UI Link Button to ptable.com ONLY for element queries
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="🌐 Open Interactive Periodic Table (Ptable.com)",
+                url=ptable_url,
+                style=discord.ButtonStyle.link,
+                emoji="⚛️"
+            ))
+            await interaction.followup.send(embed=embed, file=file, view=view)
+        else:
+            embed = discord.Embed(
+                title="🧪 Chemistry Render",
+                description=f"*Engine: {source}*",
+                color=0x00D166
+            )
+            embed.set_image(url="attachment://molecule.png")
+            embed.set_footer(text=f"Input: {molecule[:100]}")
+            await interaction.followup.send(embed=embed, file=file)
     except Exception as e:
         logging.error(f"Error in /chem: {e}", exc_info=True)
         await interaction.followup.send(f"❌ Error rendering molecule: {e}", ephemeral=True)

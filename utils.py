@@ -921,6 +921,15 @@ def process_chem_image(raw_bytes: bytes) -> BytesIO:
     # Invert white bg -> dark bg, black text/lines -> bright white
     dark_img = ImageOps.invert(img)
 
+    # Auto-crop excess dark margins around the chemical structure
+    bbox = dark_img.getbbox()
+    if bbox:
+        left = max(0, bbox[0] - 35)
+        top = max(0, bbox[1] - 35)
+        right = min(dark_img.width, bbox[2] + 35)
+        bottom = min(dark_img.height, bbox[3] + 35)
+        dark_img = dark_img.crop((left, top, right, bottom))
+
     buf = BytesIO()
     dark_img.save(buf, format='PNG')
     buf.seek(0)
