@@ -1800,4 +1800,49 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
     return buf
 
 
+async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout"):
+    """Adds the 'Locked Out' role to member and disconnects them from non-general voice channels."""
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name="Locked Out")
+    if not role:
+        try:
+            role = await guild.create_role(
+                name="Locked Out",
+                color=discord.Color.from_rgb(120, 120, 120),
+                reason="Auto-created quarantine lockout role"
+            )
+        except Exception as e:
+            logging.error(f"[QUARANTINE] Could not create 'Locked Out' role: {e}")
+            role = None
+
+    if role and role not in member.roles:
+        try:
+            await member.add_roles(role, reason=reason)
+            logging.info(f"[QUARANTINE] Assigned 'Locked Out' role to {member.display_name}")
+        except Exception as e:
+            logging.error(f"[QUARANTINE] Failed assigning 'Locked Out' role to {member.display_name}: {e}")
+
+    # Move out of voice channel if in non-general voice
+    if member.voice and member.voice.channel:
+        v_name = member.voice.channel.name.lower()
+        if "general" not in v_name and "lobby" not in v_name:
+            try:
+                await member.move_to(None)
+            except Exception:
+                pass
+
+
+async def remove_quarantine_role(member: discord.Member, reason: str = "Unlocked"):
+    """Removes the 'Locked Out' role from member."""
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name="Locked Out")
+    if role and role in member.roles:
+        try:
+            await member.remove_roles(role, reason=reason)
+            logging.info(f"[QUARANTINE] Removed 'Locked Out' role from {member.display_name}")
+        except Exception as e:
+            logging.error(f"[QUARANTINE] Failed removing 'Locked Out' role from {member.display_name}: {e}")
+
+
+
 

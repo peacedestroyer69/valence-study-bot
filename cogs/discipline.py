@@ -482,6 +482,11 @@ class DisciplineCog(commands.Cog):
                         strike_updates[uid_str] = strikes
                         db_changed = True
 
+                        # Assign 'Locked Out' Discord role
+                        from utils import apply_quarantine_role
+                        if member:
+                            await apply_quarantine_role(member, reason=f"Missed {strikes} consecutive study days")
+
                         hours_alltime = my_data.get("total_seconds_alltime", 0) / 3600
                         hours_today_approx = my_data.get("total_seconds_today", 0) / 3600
                         streak = my_data.get("current_streak_days", 0)

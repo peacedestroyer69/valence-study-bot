@@ -2625,25 +2625,17 @@ async def on_member_join(member: discord.Member):
         logging.info(f"[MEMBER JOIN] Registered new member: {member.display_name} ({member.id})")
 
         udata = data.get("users", {}).get(uid, {})
-        if udata.get("puzzle_kicks", 0) > 0:
+        if udata.get("quarantined"):
             try:
-                unverified_role = discord.utils.get(member.guild.roles, name="Unverified")
-                if not unverified_role:
-                    unverified_role = await member.guild.create_role(
-                        name="Unverified",
-                        reason="For re-entry verification after being kicked",
-                        color=discord.Color.red()
-                    )
-                await member.add_roles(unverified_role)
-                logging.info(f"[MEMBER JOIN] Assigned Unverified role to {member.display_name}")
-            except Exception as role_err:
-                logging.warning(f"Could not apply Unverified role: {role_err}")
-
-            try:
+                from utils import apply_quarantine_role
+                await apply_quarantine_role(member, reason="Re-joining while quarantined/locked out")
                 await member.send(
-                    "⚠️ **Welcome back!** You were previously kicked for not solving the Puzzle of the Day.\n\n"
-                    "You must run the `/verify` command in the server to verify yourself and restore your access, or you will be kicked again at midnight!"
+                    "🔒 **Welcome back! You are currently LOCKED OUT / ON PROBATION.**\n\n"
+                    "Your access to study voice and text channels is locked.\n"
+                    "Please type `/verify` in `#general` or `#bot-command` and solve 3 verification puzzles to restore full access!"
                 )
+            except Exception as q_err:
+                logging.warning(f"Could not re-apply Locked Out role on join: {q_err}")
             except discord.Forbidden:
                 pass
     except Exception as e:
@@ -4102,6 +4094,10 @@ async def admin_override_command(interaction: discord.Interaction, user: discord
         udata["discipline_strikes"] = 0
         udata["puzzle_verify_failed"] = False
         await save_data(data)
+
+    # Remove 'Locked Out' Discord role
+    from utils import remove_quarantine_role
+    await remove_quarantine_role(user, reason=f"Admin override by {interaction.user.display_name}")
 
     # Send DM to the unlocked user
     try:

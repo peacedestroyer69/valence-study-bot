@@ -1399,6 +1399,10 @@ class PuzzleCog(commands.Cog):
                     fresh_udata["quarantine_timestamp"] = int(time.time())
                     await self.bot.save_data(fresh_data)
 
+                # Assign 'Locked Out' Discord role
+                from utils import apply_quarantine_role
+                await apply_quarantine_role(member, reason=f"Unsolved Puzzle of the Day ({kick_date_str})")
+
                 from cogs.gemini_brain import personalized_kick_msg
                 try:
                     ai_kick = await personalized_kick_msg(
@@ -1711,6 +1715,11 @@ class PuzzleCog(commands.Cog):
                 fresh_udata["puzzle_verify_failed"] = False
                 fresh_udata["puzzle_verify_last"] = now_ist.isoformat()
                 await self.bot.save_data(fresh_data)
+
+            # Remove 'Locked Out' Discord role
+            from utils import remove_quarantine_role
+            if isinstance(interaction.user, discord.Member):
+                await remove_quarantine_role(interaction.user, reason="Passed verification")
 
             await interaction.user.send(
                 f"🎉 **Verification Passed! {score}/{VERIFY_PUZZLES_REQUIRED} correct!**\n\n"
