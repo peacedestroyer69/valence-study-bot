@@ -611,6 +611,16 @@ class DisciplineCog(commands.Cog):
                     )
                     continue
 
+                # 50-MINUTE PER-USER COOLDOWN CHECK (DB + In-Memory)
+                last_nag = self._gap_nag_sent.get(uid_str)
+                if last_nag is None and my_data.get("last_nag_timestamp"):
+                    last_nag = datetime.datetime.fromtimestamp(my_data["last_nag_timestamp"], tz=IST_TZ)
+                if last_nag is not None:
+                    elapsed = (now_ist - last_nag).total_seconds()
+                    if elapsed < 50 * 60:
+                        logging.info(f"[DISCIPLINE] Skipping hourly nag for {uid_str} — sent DM {elapsed:.0f}s ago (< 50 mins)")
+                        continue
+
                 # Find peer to compare
                 other_name, other_today = self._peer_info(users, uid_str, today_str)
                 my_today = my_data.get("daily_history", {}).get(today_str, 0) / 3600
@@ -662,8 +672,9 @@ class DisciplineCog(commands.Cog):
                         )
                     )
                     await member.send(embed=embed)
-                    # Record this user as already nagged this hour (mutual exclusion with study_gap_reminder_loop)
+                    self._gap_nag_sent[uid_str] = now_ist
                     self._hourly_nag_sent_users.setdefault(today_hour_str, set()).add(uid_str)
+                    my_data["last_nag_timestamp"] = int(now_ist.timestamp())
                     logging.info(
                         f"[DISCIPLINE] Sent {hour}:00 nag to {my_data.get('username', uid_str)} "
                         f"(state={state})"
@@ -821,12 +832,15 @@ class DisciplineCog(commands.Cog):
                         continue
 
                     # -------------------------------------------------------
-                    # BRANCH 2 & 3: Nag branches — check cooldown first
+                    # BRANCH 2 & 3: Nag branches — check persistent 50-min cooldown
                     # -------------------------------------------------------
                     last_nag = self._gap_nag_sent.get(uid_str)
+                    if last_nag is None and my_data.get("last_nag_timestamp"):
+                        last_nag = datetime.datetime.fromtimestamp(my_data["last_nag_timestamp"], tz=IST_TZ)
                     if last_nag is not None:
                         elapsed = (now_ist - last_nag).total_seconds()
-                        if elapsed < 25 * 60:
+                        if elapsed < 50 * 60:
+                            logging.info(f"[DISCIPLINE] Skipping gap reminder for {uid_str} — sent DM {elapsed:.0f}s ago (< 50 mins)")
                             continue
 
                     embed_color = _urgency_color(hour)
@@ -883,6 +897,7 @@ class DisciplineCog(commands.Cog):
                     try:
                         await member.send(embed=embed)
                         self._gap_nag_sent[uid_str] = now_ist
+                        my_data["last_nag_timestamp"] = int(now_ist.timestamp())
                         logging.info(
                             f"[DISCIPLINE] Sent gap reminder ({state}) to {my_data.get('username', uid_str)}"
                         )
