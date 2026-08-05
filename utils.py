@@ -38,31 +38,57 @@ DAILY_GOAL_SECONDS = 5400  # Daily study goal in seconds (1.5 hours)
 MIN_SESSION_SECONDS = 60   # Minimum session length to count (prevents AFK abuse)
 WEEKLY_RESET_DAY = 0      # Weekly reset day (Monday)
 
-# Maps total focused study hours (all-time) to Discord Role ID
-MILESTONE_ROLES = {
-    5:   1514208595737182338,  # 🥉 Bronze Scholar     — 5 hours
-    25:  1514208694051672195,  # 🥈 Silver Grinder     — 25 hours
-    50:  1514210766256082954,  # 🥇 Gold Grinder       — 50 hours
-    100: 1514208770887127192,  # 💎 Diamond Grindmaster — 100 hours
-    200: 1514208898406416505,  # 👑 Legendary Studier   — 200 hours
-}
+# Dynamic Role Configurations (Threshold, Name, Color Hex)
+MILESTONE_ROLE_CONFIG = [
+    (200, "👑 Legendary Studier", 0xFFD700),     # Gold
+    (100, "💎 Diamond Grindmaster", 0x00D4FF),  # Cyan
+    (50,  "🥇 Gold Grinder", 0xFEE75C),         # Yellow
+    (25,  "🥈 Silver Grinder", 0xE7E9ED),        # Silver
+    (5,   "🥉 Bronze Scholar", 0xCD7F32),        # Bronze
+]
 
-# Doubt milestone roles
-DOUBT_MILESTONE_ROLES = {
-    2:   1514228187352268830,  # 🔰 Doubt Beginner     — 2 hours
-    5:   1514238409449930752,  # 🧠 Doubt Explorer     — 5 hours
-    10:  1514238834559291563,  # 💡 Doubt Master       — 10 hours
-    25:  1514238964008226988,  # 🎓 Doubt Professor    — 25 hours
-    50:  1514254737372090438,  # 🧿 Never Had a Doubt in Life — 50 hours
-}
+DOUBT_MILESTONE_CONFIG = [
+    (50, "🧿 Never Had a Doubt in Life", 0x9B59B6),
+    (25, "🎓 Doubt Professor", 0x3498DB),
+    (10, "💡 Doubt Master", 0xF1C40F),
+    (5,  "🧠 Doubt Explorer", 0x2ECC71),
+    (2,  "🔰 Doubt Beginner", 0x1ABC9C),
+]
 
-# Text activity milestone roles
-TEXT_MILESTONE_ROLES = {
-    50:   1514254760386236496,  # 📝 Active Learner (50 msgs)
-    200:  1514255291578056714,  # 💬 Discussion Pro (200 msgs)
-    500:  1514255438093484083,  # 🗣️ Knowledge Sharer (500 msgs)
-    1000: 1514255518288576672,  # 📖 Study Sage (1000 msgs)
-}
+TEXT_MILESTONE_CONFIG = [
+    (1000, "📖 Study Sage", 0x9B59B6),
+    (500,  "🗣️ Knowledge Sharer", 0x3498DB),
+    (200,  "💬 Discussion Pro", 0x2ECC71),
+    (50,   "📝 Active Learner", 0x1ABC9C),
+]
+
+WEEKLY_TOP_STUDIER_ROLE_NAME = "🏆 Weekly Top Studier"
+
+# Legacy ID mappings kept for backwards compatibility fallback
+MILESTONE_ROLES = {5: 1514208595737182338, 25: 1514208694051672195, 50: 1514210766256082954, 100: 1514208770887127192, 200: 1514208898406416505}
+DOUBT_MILESTONE_ROLES = {2: 1514228187352268830, 5: 1514238409449930752, 10: 1514238834559291563, 25: 1514238964008226988, 50: 1514254737372090438}
+TEXT_MILESTONE_ROLES = {50: 1514254760386236496, 200: 1514255291578056714, 500: 1514255438093484083, 1000: 1514255518288576672}
+
+
+async def get_or_create_role(guild: discord.Guild, name: str, color_hex: int = 0x5865F2) -> discord.Role:
+    """Finds a role by exact or clean name, or creates it automatically if missing."""
+    clean_target = name.split()[-1].lower() if len(name.split()) > 1 else name.lower()
+    
+    for r in guild.roles:
+        if r.name.strip() == name.strip() or clean_target in r.name.lower():
+            return r
+            
+    try:
+        role = await guild.create_role(
+            name=name,
+            color=discord.Color(color_hex),
+            reason="Auto-created milestone role"
+        )
+        logging.info(f"[ROLES] Created missing role '{name}' in guild '{guild.name}'")
+        return role
+    except Exception as e:
+        logging.error(f"[ROLES] Failed creating role '{name}': {e}")
+        return None
 
 # Voice channel configuration
 STUDY_CHANNELS = {1514208313452007514, 1514596473629708298}  # Study Room, Group Study
