@@ -4114,15 +4114,15 @@ async def shutdown(sig=None):
     user='The member to unlock from probation/lockout',
     reason='Optional reason for override'
 )
-async def admin_override_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
-    """Admin command to instantly un-quarantine any locked out user and reset their strikes."""
+async def _execute_admin_override(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
+    """Helper function to perform admin override / unquarantine."""
     is_admin = (
         interaction.user.guild_permissions.administrator or
         interaction.user.guild_permissions.manage_guild or
         interaction.user.id in (VALENCE_ID, UJJWAL_ID)
     )
     if not is_admin:
-        await interaction.response.send_message("❌ Only admins can execute `/admin_override`.", ephemeral=True)
+        await interaction.response.send_message("❌ Only admins can execute this command.", ephemeral=True)
         return
 
     await interaction.response.defer()
@@ -4172,6 +4172,16 @@ async def admin_override_command(interaction: discord.Interaction, user: discord
         logging.error(f"[ADMIN_OVERRIDE] Error announcing in general: {err}")
 
 
+@bot.tree.command(name='admin_override', description='Unlock a user from probation/quarantine and reset their strikes to 0')
+@app_commands.describe(
+    user='The member to unlock from probation/lockout',
+    reason='Optional reason for override'
+)
+async def admin_override_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
+    """Admin command to instantly un-quarantine any locked out user and reset their strikes."""
+    await _execute_admin_override(interaction, user, reason)
+
+
 @bot.tree.command(name='unquarantine', description='Unlock a user from probation/quarantine and reset their strikes to 0')
 @app_commands.describe(
     user='The member to unlock from probation/lockout',
@@ -4179,7 +4189,7 @@ async def admin_override_command(interaction: discord.Interaction, user: discord
 )
 async def unquarantine_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Admin discretion"):
     """Alias for /admin_override command."""
-    await admin_override_command(interaction, user, reason)
+    await _execute_admin_override(interaction, user, reason)
 
 
 @bot.tree.command(name='setup_locked_out_permissions', description='Bulk configure server channel permissions for the Locked Out role')
