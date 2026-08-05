@@ -1798,8 +1798,10 @@ def solve_math_sympy(query: str):
 
 def render_math_card(query: str, solution_text: str, formula_tex: str = None, plot_func_str: str = None) -> BytesIO:
     """Renders a high-resolution dark-mode Math Infographic Card PNG."""
+    import matplotlib.pyplot as plt
     from matplotlib.patches import FancyBboxPatch
     import numpy as np
+    from io import BytesIO
 
     fig = plt.figure(figsize=(11, 6.5), dpi=180, facecolor='#18191C')
     
