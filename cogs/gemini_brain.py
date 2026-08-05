@@ -1804,4 +1804,25 @@ async def generate_logic_puzzle() -> dict:
     except Exception:
         return random.choice(_LOGIC_VERIFICATION_PUZZLES)
 
-
+async def fetch_gemini_chemistry_info(term: str) -> dict:
+    """Uses Gemini AI to generate structured JSON for complex chemistry terms, mixtures, and non-2D structure concepts."""
+    try:
+        prompt = f"""Generate structured chemistry details for '{term}'.
+Return ONLY a raw valid JSON object with NO markdown backticks, matching this exact schema:
+{{
+    "title": "Full Descriptive Name",
+    "type": "Chemical Category / Type (e.g. Element, Mixture, Reaction, Concept)",
+    "formula": "Chemical Formula or Main Composition",
+    "description": "2-sentence clear chemistry overview.",
+    "major_components": ["Component 1", "Component 2", "Component 3"],
+    "reactions": ["Reaction equation or chemical process 1"]
+}}"""
+        resp = await ask_gemini(prompt)
+        if not resp:
+            return None
+        cleaned = re.sub(r'```json\s*|\s*```', '', resp).strip()
+        data = json.loads(cleaned)
+        return data
+    except Exception as e:
+        logging.warning(f"[GEMINI CHEM INFO] Failed for '{term}': {e}")
+        return None

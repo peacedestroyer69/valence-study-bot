@@ -896,31 +896,139 @@ async def render_quicklatex(latex_code: str, title: str = "") -> 'BytesIO | None
     return None
 
 
+def process_chem_image(raw_bytes: bytes) -> BytesIO:
+    """Process raw API image bytes into a clean dark-mode PNG image.
+    Handles RGBA transparency by pasting onto solid white FIRST,
+    rejects corrupt/tiny fallbacks (<50x50px), and performs smart dark-mode inversion.
+    """
+    from PIL import Image, ImageOps
+    img = Image.open(BytesIO(raw_bytes))
+    
+    # Handle RGBA transparency (paste onto white canvas before inverting)
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        background = Image.new('RGB', img.size, (255, 255, 255))
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        background.paste(img, mask=img.split()[3])
+        img = background
+    else:
+        img = img.convert('RGB')
+
+    # Reject tiny/corrupt fallback images (e.g. 1x1 empty pixel)
+    if img.width < 50 or img.height < 50:
+        raise ValueError(f"Image too small ({img.width}x{img.height})")
+
+    # Invert white bg -> dark bg, black text/lines -> bright white
+    dark_img = ImageOps.invert(img)
+
+    buf = BytesIO()
+    dark_img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+
+async def fetch_cactus_structure(molecule_name: str) -> 'BytesIO | None':
+    """Fetch 2D structure PNG from NCI/NIH Cactus Chemical Identifier Resolver API.
+    Works for chemical names, IUPAC names, elements ('hydrogen', 'helium'), SMILES, CAS numbers.
+    """
+    import aiohttp
+    import urllib.parse
+    try:
+        encoded_name = urllib.parse.quote(molecule_name.strip())
+        url = f"https://cactus.nci.nih.gov/chemical/structure/{encoded_name}/image?style=chemdraw&width=500&height=500"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=aiohttp.ClientTimeout(total=7)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    buf = process_chem_image(data)
+                    logging.info(f"[CACTUS] Fetched structure for: {molecule_name}")
+                    return buf
+    except Exception as e:
+        logging.warning(f"[CACTUS] Failed for '{molecule_name}': {e}")
+    return None
+
+
 async def fetch_pubchem_structure(molecule_name: str) -> 'BytesIO | None':
     """Fetch 2D structure PNG from PubChem REST API and invert to dark-mode.
     
     Returns a BytesIO buffer with a dark-mode PNG, or None on failure.
-    Works for ANY molecule that PubChem knows about (millions of compounds).
+    Works for ANY molecule that PubChem knows about (100+ million compounds).
     """
     import aiohttp
+    import urllib.parse
     try:
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{molecule_name}/PNG?image_size=500x500"
+        encoded_name = urllib.parse.quote(molecule_name.strip())
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{encoded_name}/PNG?image_size=500x500"
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=7)) as resp:
                 if resp.status == 200:
                     data = await resp.read()
-                    from PIL import Image, ImageOps
-                    img = Image.open(BytesIO(data)).convert('RGB')
-                    # Invert white-bg to dark-mode
-                    img = ImageOps.invert(img)
-                    buf = BytesIO()
-                    img.save(buf, format='PNG')
-                    buf.seek(0)
+                    buf = process_chem_image(data)
                     logging.info(f"[PUBCHEM] Fetched structure for: {molecule_name}")
                     return buf
     except Exception as e:
-        logging.warning(f"[PUBCHEM] Failed to fetch {molecule_name}: {e}")
+        logging.warning(f"[PUBCHEM] Failed for '{molecule_name}': {e}")
     return None
+
+
+def render_chemistry_info_card(term: str, info: dict) -> BytesIO:
+    """Render a high-resolution dark-mode chemistry info card for complex terms,
+    mixtures, and non-2D structure queries like 'tar', 'acid rain', etc.
+    """
+    import textwrap
+    from matplotlib.figure import Figure
+    
+    fig = Figure(figsize=(9, 5.5), dpi=180)
+    fig.patch.set_facecolor('#2B2D31')
+    ax = fig.subplots()
+    ax.set_facecolor('#1E1F22')
+    ax.axis('off')
+
+    # Border
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_color('#4F545C')
+        spine.set_linewidth(0.8)
+
+    title = info.get('title', term.title())
+    chem_type = info.get('type', 'Chemical Mixture / Concept').upper()
+    
+    ax.text(0.05, 0.92, title, color='#FFFFFF', fontsize=14, fontweight='bold', ha='left', va='center')
+    ax.text(0.05, 0.84, chem_type, color='#5865F2', fontsize=9, fontweight='bold', ha='left', va='center')
+    ax.axhline(0.79, color='#4F545C', linewidth=0.8, xmin=0.04, xmax=0.96)
+
+    y = 0.72
+    formula = info.get('formula', 'N/A')
+    ax.text(0.05, y, 'Formula / Composition:', color='#B5BAC1', fontsize=10, fontweight='bold')
+    ax.text(0.35, y, formula, color='#00D166', fontsize=11, fontweight='bold')
+    y -= 0.10
+
+    desc = info.get('description', '')
+    wrapped_desc = textwrap.fill(desc, width=65)
+    ax.text(0.05, y, 'Overview:', color='#B5BAC1', fontsize=10, fontweight='bold', va='top')
+    ax.text(0.35, y, wrapped_desc, color='#FFFFFF', fontsize=9.5, va='top')
+    y -= 0.18
+
+    components = info.get('major_components', [])
+    if components:
+        comp_str = ' • '.join(components[:6])
+        ax.text(0.05, y, 'Major Components:', color='#B5BAC1', fontsize=10, fontweight='bold')
+        ax.text(0.35, y, comp_str, color='#FEE75C', fontsize=9.5)
+        y -= 0.10
+
+    reactions = info.get('reactions', [])
+    if reactions:
+        rxn_str = '\n'.join(reactions[:2])
+        ax.text(0.05, y, 'Key Reactions:', color='#B5BAC1', fontsize=10, fontweight='bold', va='top')
+        ax.text(0.35, y, rxn_str, color='#EB459E', fontsize=9.5, fontweight='bold', va='top')
+
+    ax.text(0.5, 0.04, 'VALENCE CHEMISTRY KNOWLEDGE ENGINE', color='#4E5058', fontsize=8, ha='center', fontweight='bold')
+
+    fig.tight_layout(pad=0.5)
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=180, bbox_inches='tight')
+    buf.seek(0)
+    return buf
 
 
 def render_chemistry_image(input_text: str, title: str = "Organic Chemistry") -> BytesIO:

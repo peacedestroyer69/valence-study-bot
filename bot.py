@@ -3692,54 +3692,78 @@ async def tex_command(interaction: discord.Interaction, formula: str):
         await interaction.followup.send(f"❌ Error rendering formula: {e}", ephemeral=True)
 
 
-@bot.tree.command(name='chem', description='Render organic chemistry structures, reactions & TikZ mechanisms as images')
+@bot.tree.command(name='chem', description='Render organic chemistry structures, reactions, elements & concepts as images')
 @app_commands.describe(
-    molecule='Molecule name, IUPAC name, chemfig code, or full TikZ reaction mechanism',
+    molecule='Molecule name, IUPAC name, element, chemfig code, reaction, or chemistry concept',
     title='Optional title for the image'
 )
 async def chem_command(interaction: discord.Interaction, molecule: str, title: str = "Organic Chemistry"):
-    """Renders organic chemistry structures and reaction mechanisms as high-res dark-mode PNG images.
-    Supports raw LaTeX/chemfig/TikZ code, PubChem compound lookup, and local matplotlib fallback."""
+    """Renders organic chemistry structures, reaction mechanisms, elements & chemistry cards as high-res dark-mode PNG images.
+    Uses QuickLaTeX -> Cactus Resolver -> PubChem -> Gemini AI Info Card -> Matplotlib Fallback."""
     await interaction.response.defer()
     try:
-        from utils import render_chemistry_image, fetch_pubchem_structure, render_quicklatex, _MOLECULE_DB
+        from utils import (
+            render_chemistry_image, fetch_pubchem_structure, fetch_cactus_structure,
+            render_quicklatex, render_chemistry_info_card, _MOLECULE_DB
+        )
+        from cogs.gemini_brain import fetch_gemini_chemistry_info
         
         img_buf = None
-        source = "matplotlib"
+        source = "Local Matplotlib Engine"
         mol_clean = molecule.strip()
         
-        # 1. If input is raw LaTeX / chemfig / TikZ code, compile with QuickLaTeX FIRST
+        # Tier 1: QuickLaTeX (if input contains TeX / chemfig / TikZ / mhchem code)
         is_latex_code = any(k in mol_clean for k in ['\\documentclass', '\\chemfig', '\\begin{', '\\node', '\\draw', '\\tikz', '\\ce{', '\\setchemfig', '\\usepackage'])
-        
         if is_latex_code:
             img_buf = await render_quicklatex(mol_clean, title)
             if img_buf:
-                source = "QuickLaTeX (ChemFig/TikZ)"
-                logging.info(f"[/chem] QuickLaTeX compiled chemfig/TikZ mechanism successfully")
+                source = "QuickLaTeX Engine"
+                logging.info(f"[/chem] QuickLaTeX compiled chemfig/TikZ mechanism for '{molecule[:40]}'")
 
-        # 2. If not LaTeX or QuickLaTeX failed, try PubChem API for compound names
-        if not img_buf:
-            is_reaction = any(a in molecule for a in ['→', '⇌', '->', '<=>', '=>'])
-            if not is_reaction and not is_latex_code:
-                try:
-                    img_buf = await fetch_pubchem_structure(mol_clean)
+        # Tier 2: NCI/NIH Cactus Resolver API (Primary 2D Chemical Identifier Resolver)
+        if not img_buf and not is_latex_code:
+            try:
+                img_buf = await fetch_cactus_structure(mol_clean)
+                if img_buf:
+                    source = "NCI/NIH Cactus Resolver"
+                    logging.info(f"[/chem] Cactus success for '{molecule[:40]}'")
+            except Exception as cactus_err:
+                logging.warning(f"[/chem] Cactus failed for '{molecule[:40]}': {cactus_err}")
+
+        # Tier 3: PubChem REST API (Secondary 100+ million compound database)
+        if not img_buf and not is_latex_code:
+            try:
+                img_buf = await fetch_pubchem_structure(mol_clean)
+                if img_buf:
+                    source = "PubChem API"
+                    logging.info(f"[/chem] PubChem success for '{molecule[:40]}'")
+            except Exception as pc_err:
+                logging.warning(f"[/chem] PubChem failed for '{molecule[:40]}': {pc_err}")
+
+        # Tier 4: Gemini AI Chemistry Info Card (For non-2D structure queries like 'tar', 'acid rain', 'petroleum')
+        if not img_buf and not is_latex_code:
+            try:
+                info_data = await fetch_gemini_chemistry_info(mol_clean)
+                if info_data and isinstance(info_data, dict) and info_data.get('title'):
+                    loop = asyncio.get_running_loop()
+                    img_buf = await loop.run_in_executor(None, render_chemistry_info_card, mol_clean, info_data)
                     if img_buf:
-                        source = "PubChem"
-                        logging.info(f"[/chem] PubChem success for: {molecule[:60]}")
-                except Exception as pc_err:
-                    logging.warning(f"[/chem] PubChem failed for '{molecule[:60]}': {pc_err}")
-        
-        # 3. Fallback to local matplotlib renderer
+                        source = "Gemini AI Chemistry Knowledge Base"
+                        logging.info(f"[/chem] Gemini AI Info Card generated for '{molecule[:40]}'")
+            except Exception as ai_err:
+                logging.warning(f"[/chem] Gemini info card failed for '{molecule[:40]}': {ai_err}")
+
+        # Tier 5: Local Matplotlib Molecule & Reaction Renderer (Fail-safe fallback)
         if not img_buf:
             loop = asyncio.get_running_loop()
             img_buf = await loop.run_in_executor(None, render_chemistry_image, molecule, title)
-            source = "matplotlib"
-            logging.info(f"[/chem] Matplotlib fallback for: {molecule[:60]}")
-        
+            source = "Local Matplotlib Engine"
+            logging.info(f"[/chem] Matplotlib fallback for '{molecule[:40]}'")
+
         file = discord.File(img_buf, filename="molecule.png")
         embed = discord.Embed(
             title="🧪 Chemistry Render",
-            description=f"*Source: {source}*" if source != "matplotlib" else "",
+            description=f"*Engine: {source}*",
             color=0x00D166
         )
         embed.set_image(url="attachment://molecule.png")
