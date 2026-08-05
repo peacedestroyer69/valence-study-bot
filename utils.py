@@ -1905,6 +1905,72 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
     return True, "Locked Out role assigned successfully."
 
 
+async def sync_channel_lockout_permissions(guild: discord.Guild) -> int:
+    """Configures total lockdown permission overrides for the 'Locked Out' role across all channels in the guild."""
+    role = discord.utils.get(guild.roles, name="Locked Out")
+    if not role:
+        try:
+            role = await guild.create_role(
+                name="Locked Out",
+                color=discord.Color.from_rgb(120, 120, 120),
+                reason="Auto-created quarantine lockout role"
+            )
+        except Exception as e:
+            logging.error(f"[QUARANTINE] Could not create 'Locked Out' role: {e}")
+            return 0
+
+    updated_count = 0
+    for channel in guild.channels:
+        try:
+            ch_name = channel.name.lower()
+            if channel.id == GENERAL_CHANNEL_ID or "general" in ch_name or "bot-command" in ch_name:
+                # Allow access ONLY in general / bot-command
+                await channel.set_permissions(
+                    role,
+                    view_channel=True,
+                    send_messages=True,
+                    connect=True,
+                    reason="Allow general access for Locked Out role"
+                )
+            else:
+                # Total lockdown on all other channels, categories, and threads
+                if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        send_messages=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        reason="Total lockdown text channel & threads"
+                    )
+                elif isinstance(channel, discord.VoiceChannel):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        connect=False,
+                        speak=False,
+                        reason="Total lockdown voice channel"
+                    )
+                elif isinstance(channel, discord.CategoryChannel):
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        send_messages=False,
+                        connect=False,
+                        create_public_threads=False,
+                        create_private_threads=False,
+                        send_messages_in_threads=False,
+                        reason="Total lockdown category"
+                    )
+            updated_count += 1
+        except Exception as err:
+            logging.warning(f"Could not set permission override for #{channel.name}: {err}")
+
+    logging.info(f"[QUARANTINE] Auto-synced total lockdown permission overrides for {updated_count} channels in '{guild.name}'")
+    return updated_count
+
+
 async def remove_quarantine_role(member: discord.Member, reason: str = "Unlocked"):
     """Removes the 'Locked Out' role from member."""
     guild = member.guild

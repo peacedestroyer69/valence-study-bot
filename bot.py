@@ -2611,11 +2611,12 @@ async def on_ready():
     except Exception as sync_err:
         logging.error(f"Failed to sync application commands: {sync_err}")
 
-    # Startup Audit: Auto-assign 'Locked Out' role to any quarantined users upon startup
+    # Startup Audit: Auto-sync channel lockdown permissions & quarantine roles
     try:
-        from utils import apply_quarantine_role
+        from utils import apply_quarantine_role, sync_channel_lockout_permissions
         data = await load_data()
         for guild in bot.guilds:
+            await sync_channel_lockout_permissions(guild)
             for uid, udata in data.get("users", {}).items():
                 if udata.get("quarantined"):
                     member = guild.get_member(int(uid))
@@ -2625,6 +2626,27 @@ async def on_ready():
         logging.warning(f"Startup quarantine audit error: {audit_err}")
 
     logging.info("Bot ready. All systems operational.")
+
+
+@bot.event
+async def on_thread_create(thread: discord.Thread):
+    """Deletes any thread created by a quarantined user in non-general channels."""
+    try:
+        parent = thread.parent
+        if parent:
+            ch_name = parent.name.lower()
+            if parent.id == GENERAL_CHANNEL_ID or "general" in ch_name or "bot-command" in ch_name:
+                return
+
+        creator_id = thread.owner_id
+        if creator_id:
+            data = await load_data()
+            udata = data.get("users", {}).get(str(creator_id), {})
+            if udata.get("quarantined"):
+                await thread.delete()
+                logging.info(f"[QUARANTINE BLOCKED] Deleted thread '{thread.name}' created by quarantined user {creator_id}")
+    except Exception as e:
+        logging.error(f"Error checking thread creation quarantine: {e}")
 
 
 @bot.event
