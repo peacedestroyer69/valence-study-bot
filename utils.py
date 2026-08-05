@@ -1753,27 +1753,60 @@ def fetch_wolfram_alpha(query: str) -> str:
     return None
 
 
+def fetch_newton_math(query: str) -> str:
+    """Fetch calculus/algebra solutions from free Newton Math Microservice API."""
+    try:
+        import requests, urllib.parse, re
+        q = query.lower().strip()
+        op = "simplify"
+        expr = q
+
+        if 'integrate' in q or 'integral' in q or 'int ' in q:
+            op = "integrate"
+            expr = re.sub(r'integrate|integral of|int|dx|dy|dt', '', q, flags=re.IGNORECASE).strip()
+        elif 'diff' in q or 'derivative' in q or 'd/dx' in q:
+            op = "derive"
+            expr = re.sub(r'derivative of|diff|d/dx|dx|dy|dt', '', q, flags=re.IGNORECASE).strip()
+        elif 'factor' in q:
+            op = "factor"
+            expr = q.replace('factor', '').strip()
+
+        if not expr:
+            return None
+
+        url = f"https://newton.now.sh/api/v2/{op}/{urllib.parse.quote(expr)}"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            res_val = data.get("result")
+            if res_val:
+                return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
+    except Exception as e:
+        logging.warning(f"[NEWTON API] Failed for '{query}': {e}")
+    return None
+
+
 def solve_math_sympy(query: str):
     """Solve math expression or equation using SymPy if available."""
     try:
-        import sympy as sp
+        import sympy as sp, re
         x, y, z, t = sp.symbols('x y z t')
         q = query.strip()
 
         if 'diff' in q or 'derivative' in q or 'd/dx' in q:
-            clean_q = q.replace('derivative of', '').replace('diff', '').replace('d/dx', '').strip()
+            clean_q = re.sub(r'derivative of|diff|d/dx|\bd[xytz]\b', '', q, flags=re.IGNORECASE).replace('^', '**').strip()
             expr = sp.sympify(clean_q)
             res = sp.diff(expr, x)
             return f"d/dx [{clean_q}] = {res}", f"\\frac{{d}}{{dx}}\\left({sp.latex(expr)}\\right) = {sp.latex(res)}"
 
         if 'integrate' in q or 'integral' in q or 'int' in q:
-            clean_q = q.replace('integral of', '').replace('integrate', '').replace('int', '').strip()
+            clean_q = re.sub(r'integral of|integrate|int|\bd[xytz]\b', '', q, flags=re.IGNORECASE).replace('^', '**').strip()
             expr = sp.sympify(clean_q)
             res = sp.integrate(expr, x)
             return f"∫ ({clean_q}) dx = {res} + C", f"\\int \\left({sp.latex(expr)}\\right) dx = {sp.latex(res)} + C"
 
         if '=' in q or 'solve' in q:
-            clean_q = q.replace('solve', '').strip()
+            clean_q = q.replace('solve', '').replace('^', '**').strip()
             if '=' in clean_q:
                 lhs, rhs = clean_q.split('=', 1)
                 eq = sp.Eq(sp.sympify(lhs), sp.sympify(rhs))
@@ -1782,7 +1815,8 @@ def solve_math_sympy(query: str):
             res = sp.solve(eq)
             return f"Solution: x = {res}", f"x = {sp.latex(res)}"
 
-        expr = sp.sympify(q)
+        clean_q = q.replace('^', '**').strip()
+        expr = sp.sympify(clean_q)
         simplified = sp.simplify(expr)
         evaluated = repr(simplified)
         try:
@@ -1793,6 +1827,7 @@ def solve_math_sympy(query: str):
         return f"Result: {evaluated}", sp.latex(simplified)
     except Exception as e:
         logging.warning(f"[SYMPY] SymPy not available or expression error: {e}")
+        return None, None
         return None, None
 
 

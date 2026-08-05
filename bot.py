@@ -3891,7 +3891,7 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
     Uses WolframAlpha API -> SymPy Engine -> Gemini AI Math Solver -> Dark-Mode Math Infographic Card."""
     await interaction.response.defer()
     try:
-        from utils import fetch_wolfram_alpha, solve_math_sympy, render_math_card, render_quicklatex
+        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, render_math_card, render_quicklatex
         from cogs.gemini_brain import fetch_gemini_math_info
         
         img_buf = None
@@ -3914,7 +3914,14 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
                 source = "SymPy Math Engine"
                 solution_str = f"SymPy Exact Solution:\n{sy_text}"
 
-        # Tier 3: Gemini AI Math Tutor
+        # Tier 3: Newton Math Microservice API
+        if not solution_str:
+            nt_res = await asyncio.to_thread(fetch_newton_math, q_clean)
+            if nt_res:
+                source = "Newton Math API"
+                solution_str = f"Newton Calculus Engine:\n{nt_res}"
+
+        # Tier 4: Gemini AI Math Tutor
         if not solution_str or len(solution_str) < 15:
             gem_data = await fetch_gemini_math_info(q_clean)
             if gem_data:
