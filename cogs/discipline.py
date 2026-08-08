@@ -407,6 +407,10 @@ class DisciplineCog(commands.Cog):
                     logging.info(f"[DISCIPLINE] Skipping strike update for {uid_str} — user has left the server.")
                     continue
 
+                # IMMUNITY: Exempt Valence, Ujjwal, Server Owner, and Administrators from discipline strikes & lockouts
+                if member.id in (VALENCE_ID, UJJWAL_ID) or member.guild_permissions.administrator or guild.owner_id == member.id:
+                    continue
+
                 strikes += 1
                 strike_updates[uid_str] = strikes
                 db_changed = True

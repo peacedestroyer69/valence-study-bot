@@ -1943,6 +1943,11 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
 
 async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout") -> tuple[bool, str]:
     """Adds the 'Locked Out' role to member, strips member roles, and disconnects them from non-general voice channels."""
+    # ADMIN / SUPER-ADMIN IMMUNITY: Never un-admin or lockout Valence, Ujjwal, Server Owner, or Administrators
+    if member.id in (VALENCE_ID, UJJWAL_ID) or member.guild_permissions.administrator or member.guild.owner_id == member.id:
+        logging.warning(f"[QUARANTINE EXEMPT] {member.display_name} ({member.id}) is an Administrator/Owner and is exempt from lockout.")
+        return False, f"Member {member.display_name} is an Administrator and cannot be locked out or un-admined."
+
     guild = member.guild
     role = discord.utils.get(guild.roles, name="Locked Out")
     if not role:
@@ -1957,10 +1962,10 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
             return False, f"Could not create 'Locked Out' role: {e}"
 
     if role:
-        # Strip other member roles to prevent Discord permission ALLOW overrides
+        # Strip other member roles to prevent Discord permission ALLOW overrides (Never strip admin roles)
         roles_to_remove = [
             r for r in member.roles 
-            if not r.is_default() and not r.managed and r != role and r.position < guild.me.top_role.position
+            if not r.is_default() and not r.managed and r != role and not r.permissions.administrator and r.position < guild.me.top_role.position
         ]
         if roles_to_remove:
             try:

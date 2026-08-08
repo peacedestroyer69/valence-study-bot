@@ -1379,6 +1379,9 @@ class PuzzleCog(commands.Cog):
             for member in guild.members:
                 if member.bot:
                     continue
+                # IMMUNITY: Exempt Valence, Ujjwal, Server Owner, and Administrators from puzzle lockouts
+                if member.id in (VALENCE_ID, UJJWAL_ID) or member.guild_permissions.administrator or guild.owner_id == member.id:
+                    continue
                 uid = str(member.id)
                 if uid in solved_users:
                     solved_members.append(member)
