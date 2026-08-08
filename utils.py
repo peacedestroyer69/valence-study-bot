@@ -1805,8 +1805,17 @@ def fetch_newton_math(query: str) -> str:
                 if resp.status_code == 200:
                     data = resp.json()
                     res_val = data.get("result")
-                    if res_val and str(res_val).strip():
-                        return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
+                    res_str = str(res_val).strip() if res_val is not None else ''
+                    # Reject empty, error strings, or results that are just the input echoed back with punctuation
+                    if not res_str:
+                        continue
+                    if any(bad in res_str.lower() for bad in ['error', 'undefined', 'invalid', 'nan']):
+                        continue
+                    # Reject if result is suspiciously similar to garbage input (contains special chars from expr)
+                    special_chars_in_expr = sum(1 for c in expr if not c.isalnum() and c not in '()+-*/^. ')
+                    if special_chars_in_expr > 2 and special_chars_in_expr >= len(expr) * 0.3:
+                        continue
+                    return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
             except Exception:
                 continue
     except Exception as e:
@@ -1835,6 +1844,18 @@ def fetch_mathjs_api(query: str) -> str:
     return None
 
 
+# ──────────────────────────────────────────────────────────────────
+# SECURITY: Patterns that must NEVER reach SymPy/eval
+# ──────────────────────────────────────────────────────────────────
+_INJECTION_BLOCKLIST = (
+    '__import__', '__builtins__', '__class__', '__bases__', '__subclasses__',
+    '__mro__', '__dict__', '__globals__', 'os.system', 'os.popen', 'os.spawn',
+    'subprocess', 'exec(', 'eval(', 'compile(', 'open(', 'file(',
+    'globals()', 'locals()', 'vars()', 'dir(', 'getattr(', 'setattr(',
+    'delattr(', 'importlib', 'builtins', '.call(', '.run(',
+)
+
+
 def solve_math_sympy(query: str):
     """Advanced SymPy math solver supporting algebra, calculus, limits, series, matrices, trig, systems, and more.
     Returns (text_result, latex_result) tuple."""
@@ -1843,6 +1864,17 @@ def solve_math_sympy(query: str):
         import re
         x, y, z, t, n, k = sp.symbols('x y z t n k')
         q = query.strip()
+
+        # ── SECURITY: Block injection patterns before ANY processing ──
+        q_lower_check = q.lower()
+        for blocked in _INJECTION_BLOCKLIST:
+            if blocked.lower() in q_lower_check:
+                logging.warning(f"[SYMPY] Injection attempt blocked: {blocked!r} in query")
+                return None, None
+
+        # ── Unicode math symbol normalization ──
+        q = q.replace('√', 'sqrt').replace('∫', 'integrate ').replace('∂', 'partial ')
+        q = q.replace('→', '->').replace('⁻¹', '^(-1)').replace('∞', 'oo')
         ql = q.lower()
 
         # Helper: implicit multiplication (5x -> 5*x, 3( -> 3*()
@@ -1852,7 +1884,7 @@ def solve_math_sympy(query: str):
             s = re.sub(r'(\))(\d|[a-zA-Z])', r'\1*\2', s)
             return s
 
-        # Helper: smart sympify with local namespace
+        # Helper: safe sympify — restricted locals, no builtins at all
         _locals = {'x': x, 'y': y, 'z': z, 't': t, 'n': n, 'k': k,
                     'pi': sp.pi, 'e': sp.E, 'E': sp.E, 'I': sp.I, 'oo': sp.oo,
                     'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
@@ -1862,7 +1894,11 @@ def solve_math_sympy(query: str):
                     'abs': sp.Abs, 'factorial': sp.factorial}
 
         def _smart_sympify(s):
-            return sp.sympify(s, locals=_locals)
+            # Double-check cleaned expression for injections
+            for blocked in _INJECTION_BLOCKLIST:
+                if blocked.lower() in s.lower():
+                    raise ValueError(f"Blocked expression: {blocked}")
+            return sp.sympify(s, locals=_locals, evaluate=True)
 
         # ──────────────────────────────────────────────
         # 1. LIMITS: limit x->0 sin(x)/x, lim x->inf 1/x
