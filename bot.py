@@ -3890,68 +3890,89 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
     title='Optional title for the solution card'
 )
 async def math_command(interaction: discord.Interaction, expression: str, title: str = "Mathematics & Physics Engine"):
-    """Solves math & physics equations, calculus, limits, and matrix problems.
-    Uses WolframAlpha API -> SymPy Engine -> Gemini AI Math Solver -> Dark-Mode Math Infographic Card."""
+    """Solves math & physics: algebra, calculus, limits, series, matrices, trig, systems, and physics word problems.
+    Tier 1: SymPy (instant) -> Tier 2: WolframAlpha -> Tier 3: Newton API -> Tier 4: Gemini AI (word problems only)."""
     await interaction.response.defer()
     try:
-        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, render_math_card, render_quicklatex
+        import time as _time
+        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, render_math_card
         from cogs.gemini_brain import fetch_gemini_math_info
-        
-        img_buf = None
+
+        t_start = _time.monotonic()
         source = "Valence Math Engine"
         q_clean = expression.strip()
         solution_str = ""
+        formula_tex = None
         plot_expr = None
 
-        # Tier 1: WolframAlpha API
-        wf_res = await asyncio.to_thread(fetch_wolfram_alpha, q_clean)
-        if wf_res:
-            source = "WolframAlpha API"
-            solution_str = f"WolframAlpha Result:\n{wf_res}"
-            logging.info(f"[/math] WolframAlpha API success for: {q_clean}")
+        # Tier 1: SymPy Local Engine (instant, handles 90%+ of math)
+        sy_text, sy_tex = await asyncio.to_thread(solve_math_sympy, q_clean)
+        if sy_text:
+            source = "SymPy Engine"
+            solution_str = sy_text
+            formula_tex = sy_tex
+            logging.info(f"[/math] SymPy success for: {q_clean}")
 
-        # Tier 2: SymPy Engine
+        # Tier 2: WolframAlpha API (for complex queries SymPy can't parse)
         if not solution_str:
-            sy_text, sy_tex = await asyncio.to_thread(solve_math_sympy, q_clean)
-            if sy_text:
-                source = "SymPy Math Engine"
-                solution_str = f"SymPy Exact Solution:\n{sy_text}"
+            wf_res = await asyncio.to_thread(fetch_wolfram_alpha, q_clean)
+            if wf_res:
+                source = "WolframAlpha API"
+                solution_str = f"Result: {wf_res}"
+                logging.info(f"[/math] WolframAlpha success for: {q_clean}")
 
-        # Tier 3: Newton Math Microservice API
+        # Tier 3: Newton Math API (free calculus fallback)
         if not solution_str:
             nt_res = await asyncio.to_thread(fetch_newton_math, q_clean)
             if nt_res:
                 source = "Newton Math API"
-                solution_str = f"Newton Calculus Engine:\n{nt_res}"
+                solution_str = nt_res
 
-        # Tier 4: Gemini AI Math Tutor (Only fallback if Tiers 1-3 couldn't solve it)
+        # Tier 4: Gemini AI (ONLY for word problems / physics that can't be solved symbolically)
         if not solution_str:
             gem_data = await fetch_gemini_math_info(q_clean)
             if gem_data:
-                source = f"Gemini AI Solver ({gem_data.get('type', 'Math')})"
+                source = f"Gemini AI ({gem_data.get('type', 'Math')})"
                 steps = "\n".join(gem_data.get("solution_steps", []))
                 ans = gem_data.get("final_answer", "")
                 solution_str = f"Topic: {gem_data.get('title', 'Math Problem')}\n\n{steps}\n\nFinal Answer: {ans}"
                 plot_expr = gem_data.get("plot_expression")
 
-        # Fallback text if all engines empty
+        # Fallback text if all engines returned empty
         if not solution_str:
-            solution_str = f"Expression: {q_clean}\n\nEvaluated using Valence Math Engine."
+            solution_str = f"Expression: {q_clean}\n\nCould not solve. Try rephrasing or simplifying."
 
-        # Detect plottable functions (e.g. sin(x), x^2, exp(x))
-        if not plot_expr and any(k in q_clean.lower() for k in ['x', 'sin', 'cos', 'tan', 'exp', 'log']):
-            plot_expr = q_clean.replace('^', '**').replace('d/dx', '').replace('integrate', '').strip()
+        # Smart plot detection: only for single-variable function expressions
+        if not plot_expr:
+            ql = q_clean.lower()
+            # Only try to plot if it looks like a function (not an equation, word problem, or matrix)
+            is_plottable = (
+                'x' in ql and
+                '=' not in q_clean and
+                'solve' not in ql and
+                'limit' not in ql and 'lim ' not in ql and
+                'taylor' not in ql and 'series' not in ql and
+                'sum' not in ql and
+                'det' not in ql and 'inverse' not in ql and
+                'integrate' not in ql and 'integral' not in ql and
+                'd/dx' not in ql and 'derivative' not in ql and
+                not any(w in ql for w in ['car', 'ball', 'velocity', 'force', 'find', 'what', 'how'])
+            )
+            if is_plottable:
+                plot_expr = q_clean.replace('^', '**')
+
+        t_elapsed = _time.monotonic() - t_start
 
         # Render high-res dark mode math card
         loop = asyncio.get_running_loop()
         img_buf = await loop.run_in_executor(
-            None, render_math_card, q_clean, solution_str, None, plot_expr
+            None, render_math_card, q_clean, solution_str, formula_tex, plot_expr, source
         )
 
         file = discord.File(img_buf, filename="math_solution.png")
         embed = discord.Embed(
             title=f"🧮 {title}",
-            description=f"*Engine: {source}*",
+            description=f"*Engine: {source}* • Solved in `{t_elapsed:.2f}s`",
             color=0x5865F2
         )
         embed.set_image(url="attachment://math_solution.png")

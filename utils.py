@@ -1739,47 +1739,65 @@ def generate_db_stats_chart(db_stats_data: dict, timeframe: str = "day") -> Byte
 # ============================================================
 
 def fetch_wolfram_alpha(query: str) -> str:
-    """Fetch result from WolframAlpha API if WOLFRAM_ALPHA_APP_ID is set."""
+    """Fetch result from WolframAlpha Short Answers API with Full Results fallback."""
+    import requests
+    import urllib.parse
     app_id = os.getenv("WOLFRAM_ALPHA_APP_ID", "")
     if not app_id:
         return None
     try:
+        # Short Answers API (fastest)
         url = f"http://api.wolframalpha.com/v1/result?appid={app_id}&i={urllib.parse.quote(query)}"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
+        resp = requests.get(url, timeout=8)
+        if resp.status_code == 200 and resp.text.strip():
             return resp.text.strip()
     except Exception as e:
-        logging.warning(f"[WOLFRAM] Error fetching WolframAlpha API: {e}")
+        logging.warning(f"[WOLFRAM] Short Answers API error: {e}")
+    try:
+        # Spoken Results API (fallback for natural language)
+        url2 = f"http://api.wolframalpha.com/v1/spoken?appid={app_id}&i={urllib.parse.quote(query)}"
+        resp2 = requests.get(url2, timeout=8)
+        if resp2.status_code == 200 and resp2.text.strip():
+            return resp2.text.strip()
+    except Exception as e:
+        logging.warning(f"[WOLFRAM] Spoken API error: {e}")
     return None
 
 
 def fetch_newton_math(query: str) -> str:
-    """Fetch calculus/algebra solutions from free Newton Math Microservice API."""
+    """Fetch calculus/algebra solutions from the free Newton Math API (newton.vercel.app)."""
+    import requests
+    import urllib.parse
+    import re
     try:
-        import requests, urllib.parse, re
         q = query.lower().strip()
         op = "simplify"
         expr = q
 
-        if 'integrate' in q or 'integral' in q or 'int ' in q:
-            op = "integrate"
-            expr = re.sub(r'integrate|integral of|int|dx|dy|dt', '', q, flags=re.IGNORECASE).strip()
-        elif 'diff' in q or 'derivative' in q or 'd/dx' in q:
-            op = "derive"
-            expr = re.sub(r'derivative of|diff|d/dx|dx|dy|dt', '', q, flags=re.IGNORECASE).strip()
-        elif 'factor' in q:
-            op = "factor"
-            expr = q.replace('factor', '').strip()
+        op_map = [
+            (['integrate', 'integral', '∫'], 'integrate', r'integrate|integral of|∫|\bd[xytz]\b'),
+            (['diff', 'derivative', 'd/dx', "d/dy"], 'derive', r'derivative of|diff|d/dx|d/dy|\bd[xytz]\b'),
+            (['factor'], 'factor', r'factor'),
+            (['zero', 'root', 'roots'], 'zeroes', r'zero(?:e?s)?|roots?|find.*roots?'),
+            (['tangent'], 'tangent', r'tangent'),
+            (['evaluate', 'eval', 'calculate', 'compute'], 'evaluate', r'evaluate|eval(?:uate)?|calculate|compute'),
+        ]
+
+        for keywords, operation, pattern in op_map:
+            if any(k in q for k in keywords):
+                op = operation
+                expr = re.sub(pattern, '', q, flags=re.IGNORECASE).strip()
+                break
 
         if not expr:
             return None
 
-        url = f"https://newton.now.sh/api/v2/{op}/{urllib.parse.quote(expr)}"
-        resp = requests.get(url, timeout=5)
+        url = f"https://newton.vercel.app/api/v2/{op}/{urllib.parse.quote(expr)}"
+        resp = requests.get(url, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
             res_val = data.get("result")
-            if res_val:
+            if res_val and str(res_val).strip():
                 return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
     except Exception as e:
         logging.warning(f"[NEWTON API] Failed for '{query}': {e}")
@@ -1787,41 +1805,212 @@ def fetch_newton_math(query: str) -> str:
 
 
 def solve_math_sympy(query: str):
-    """Solve math expression or equation using SymPy if available."""
+    """Advanced SymPy math solver supporting algebra, calculus, limits, series, matrices, trig, systems, and more.
+    Returns (text_result, latex_result) tuple."""
     try:
-        import sympy as sp, re
-        x, y, z, t = sp.symbols('x y z t')
+        import sympy as sp
+        import re
+        x, y, z, t, n, k = sp.symbols('x y z t n k')
         q = query.strip()
+        ql = q.lower()
 
-        # Helper to insert implicit multiplication (e.g. 5x -> 5*x, 3( -> 3*()
+        # Helper: implicit multiplication (5x -> 5*x, 3( -> 3*()
         def _clean_expr(expr_s: str) -> str:
             s = expr_s.replace('^', '**').strip()
             s = re.sub(r'(\d)([a-zA-Z\(])', r'\1*\2', s)
             s = re.sub(r'(\))(\d|[a-zA-Z])', r'\1*\2', s)
             return s
 
-        if 'diff' in q or 'derivative' in q or 'd/dx' in q:
-            clean_q = re.sub(r'derivative of|diff|d/dx|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
-            clean_q = _clean_expr(clean_q)
-            expr = sp.sympify(clean_q)
-            res = sp.diff(expr, x)
-            return f"d/dx [{clean_q}] = {res}", f"\\frac{{d}}{{dx}}\\left({sp.latex(expr)}\\right) = {sp.latex(res)}"
+        # Helper: smart sympify with local namespace
+        _locals = {'x': x, 'y': y, 'z': z, 't': t, 'n': n, 'k': k,
+                    'pi': sp.pi, 'e': sp.E, 'E': sp.E, 'I': sp.I, 'oo': sp.oo,
+                    'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
+                    'asin': sp.asin, 'acos': sp.acos, 'atan': sp.atan,
+                    'sinh': sp.sinh, 'cosh': sp.cosh, 'tanh': sp.tanh,
+                    'log': sp.log, 'ln': sp.ln, 'exp': sp.exp, 'sqrt': sp.sqrt,
+                    'abs': sp.Abs, 'factorial': sp.factorial}
 
-        if 'integrate' in q or 'integral' in q or 'int' in q:
-            clean_q = re.sub(r'integral of|integrate|int|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
+        def _smart_sympify(s):
+            return sp.sympify(s, locals=_locals)
+
+        # ──────────────────────────────────────────────
+        # 1. LIMITS: limit x->0 sin(x)/x, lim x->inf 1/x
+        # ──────────────────────────────────────────────
+        lim_match = re.match(
+            r'(?:lim(?:it)?)\s*(?:as\s+)?([xyzt])\s*(?:->|→|to|approaches?)\s*'
+            r'([-+]?(?:inf(?:inity)?|oo|\d+(?:\.\d+)?))\s*(?:of\s+)?(.*)',
+            ql, re.IGNORECASE
+        )
+        if not lim_match:
+            lim_match = re.match(
+                r'(?:lim(?:it)?)\s+(.*?)\s+(?:as\s+)?([xyzt])\s*(?:->|→|to)\s*'
+                r'([-+]?(?:inf(?:inity)?|oo|\d+(?:\.\d+)?))',
+                ql, re.IGNORECASE
+            )
+            if lim_match:
+                lim_match = type('M', (), {'group': lambda self, i: [None, lim_match.group(2), lim_match.group(3), lim_match.group(1)][i]})()
+        if lim_match:
+            var_s = lim_match.group(1)
+            point_s = lim_match.group(2).replace('infinity', 'oo').replace('inf', 'oo')
+            expr_s = _clean_expr(lim_match.group(3))
+            var = sp.Symbol(var_s)
+            point = sp.oo if point_s == 'oo' else (-sp.oo if point_s == '-oo' else sp.Rational(point_s))
+            expr = _smart_sympify(expr_s)
+            res = sp.limit(expr, var, point)
+            return (f"lim ({var_s}→{point_s}) [{expr_s}] = {res}",
+                    f"\\lim_{{{var_s} \\to {sp.latex(point)}}} {sp.latex(expr)} = {sp.latex(res)}")
+
+        # ──────────────────────────────────────────────
+        # 2. TAYLOR / MACLAURIN SERIES
+        # ──────────────────────────────────────────────
+        taylor_match = re.match(
+            r'(?:taylor|maclaurin|series)\s+(.*?)(?:\s+(?:at|about|around)\s+([xyzt])\s*=\s*([\d.]+))?'
+            r'(?:\s+(?:order|degree|n|terms?)\s*=?\s*(\d+))?$',
+            ql, re.IGNORECASE
+        )
+        if taylor_match and ('taylor' in ql or 'maclaurin' in ql or 'series' in ql):
+            expr_s = _clean_expr(taylor_match.group(1))
+            var_s = taylor_match.group(2) or 'x'
+            center = int(taylor_match.group(3) or 0)
+            order = int(taylor_match.group(4) or 5)
+            var = sp.Symbol(var_s)
+            expr = _smart_sympify(expr_s)
+            res = sp.series(expr, var, center, order + 1).removeO()
+            return (f"Taylor({expr_s}, {var_s}={center}, order {order}) = {res}",
+                    f"{sp.latex(expr)} = {sp.latex(res)} + O({var_s}^{{{order+1}}})")
+
+        # ──────────────────────────────────────────────
+        # 3. SUMMATION: sum 1/n^2 from n=1 to inf
+        # ──────────────────────────────────────────────
+        sum_match = re.match(
+            r'(?:sum(?:mation)?)\s+(.*?)(?:\s+from\s+([nk])\s*=\s*(\d+)\s+to\s+(inf(?:inity)?|oo|\d+))',
+            ql, re.IGNORECASE
+        )
+        if sum_match:
+            expr_s = _clean_expr(sum_match.group(1))
+            var_s = sum_match.group(2)
+            lower = int(sum_match.group(3))
+            upper_s = sum_match.group(4).replace('infinity', 'oo').replace('inf', 'oo')
+            upper = sp.oo if upper_s == 'oo' else int(upper_s)
+            var = sp.Symbol(var_s)
+            expr = _smart_sympify(expr_s)
+            res = sp.summation(expr, (var, lower, upper))
+            return (f"Σ ({var_s}={lower} to {upper_s}) [{expr_s}] = {res}",
+                    f"\\sum_{{{var_s}={lower}}}^{{{sp.latex(upper)}}} {sp.latex(expr)} = {sp.latex(res)}")
+
+        # ──────────────────────────────────────────────
+        # 4. MATRIX OPERATIONS: det [[1,2],[3,4]], inverse [[...]]
+        # ──────────────────────────────────────────────
+        mat_match = re.match(
+            r'(det(?:erminant)?|inv(?:erse)?|transpose|eigenvalue|trace|rank|rref)\s*'
+            r'(\[\[.*?\]\]|\[.*?\])',
+            ql, re.IGNORECASE
+        )
+        if mat_match:
+            mat_op = mat_match.group(1).lower()
+            mat_str = mat_match.group(2)
+            mat_data = eval(mat_str)  # Parse [[1,2],[3,4]]
+            M = sp.Matrix(mat_data)
+            if mat_op.startswith('det'):
+                res = M.det()
+                return f"det(M) = {res}", f"\\det{sp.latex(M)} = {sp.latex(res)}"
+            elif mat_op.startswith('inv'):
+                res = M.inv()
+                return f"M⁻¹ =\n{res}", f"{sp.latex(M)}^{{-1}} = {sp.latex(res)}"
+            elif mat_op == 'transpose':
+                res = M.T
+                return f"Mᵀ =\n{res}", f"{sp.latex(M)}^T = {sp.latex(res)}"
+            elif mat_op.startswith('eigen'):
+                evals = M.eigenvals()
+                res_str = ", ".join(f"λ={v} (mult {m})" for v, m in evals.items())
+                return f"Eigenvalues: {res_str}", f"\\lambda = {sp.latex(evals)}"
+            elif mat_op == 'trace':
+                res = M.trace()
+                return f"tr(M) = {res}", f"\\text{{tr}}({sp.latex(M)}) = {sp.latex(res)}"
+            elif mat_op == 'rank':
+                res = M.rank()
+                return f"rank(M) = {res}", f"\\text{{rank}}({sp.latex(M)}) = {res}"
+            elif mat_op == 'rref':
+                res, pivots = M.rref()
+                return f"RREF(M) =\n{res}\nPivots: {pivots}", f"\\text{{rref}}({sp.latex(M)}) = {sp.latex(res)}"
+
+        # ──────────────────────────────────────────────
+        # 5. PARTIAL DERIVATIVES
+        # ──────────────────────────────────────────────
+        partial_match = re.match(
+            r'(?:partial\s+)?(?:derivative|diff|∂)\s+(?:of\s+)?(.*?)\s+(?:with\s+respect\s+to|wrt|w\.r\.t\.?)\s+([xyzt])',
+            ql, re.IGNORECASE
+        )
+        if partial_match:
+            expr_s = _clean_expr(partial_match.group(1))
+            var_s = partial_match.group(2)
+            var = sp.Symbol(var_s)
+            expr = _smart_sympify(expr_s)
+            res = sp.diff(expr, var)
+            return (f"∂/∂{var_s} [{expr_s}] = {res}",
+                    f"\\frac{{\\partial}}{{\\partial {var_s}}} \\left({sp.latex(expr)}\\right) = {sp.latex(res)}")
+
+        # ──────────────────────────────────────────────
+        # 6. DERIVATIVES: d/dx f(x), derivative of f(x)
+        # ──────────────────────────────────────────────
+        if 'diff' in ql or 'derivative' in ql or 'd/dx' in ql or 'd/dy' in ql or 'd/dt' in ql:
+            var_match = re.search(r'd/d([xyzt])', ql)
+            diff_var = sp.Symbol(var_match.group(1)) if var_match else x
+            clean_q = re.sub(r'(?:nth\s+)?derivative\s+of|diff|d/d[xyzt]|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
             clean_q = _clean_expr(clean_q)
-            expr = sp.sympify(clean_q)
+            expr = _smart_sympify(clean_q)
+            res = sp.diff(expr, diff_var)
+            dv = str(diff_var)
+            return (f"d/d{dv} [{clean_q}] = {res}",
+                    f"\\frac{{d}}{{d{dv}}}\\left({sp.latex(expr)}\\right) = {sp.latex(res)}")
+
+        # ──────────────────────────────────────────────
+        # 7. INTEGRALS: integrate f(x) dx
+        # ──────────────────────────────────────────────
+        if 'integrate' in ql or 'integral' in ql or '∫' in ql:
+            clean_q = re.sub(r'integral of|integrate|∫|\bd[xytz]\b', '', q, flags=re.IGNORECASE)
+            clean_q = _clean_expr(clean_q)
+            expr = _smart_sympify(clean_q)
             res = sp.integrate(expr, x)
-            return f"∫ ({clean_q}) dx = {res} + C", f"\\int \\left({sp.latex(expr)}\\right) dx = {sp.latex(res)} + C"
+            return (f"∫ ({clean_q}) dx = {res} + C",
+                    f"\\int \\left({sp.latex(expr)}\\right) dx = {sp.latex(res)} + C")
 
-        if '=' in q or 'solve' in q:
+        # ──────────────────────────────────────────────
+        # 8. SYSTEMS OF EQUATIONS: solve x+y=5, 2x-y=1
+        # ──────────────────────────────────────────────
+        if ',' in q and '=' in q:
+            parts = [p.strip() for p in q.replace('solve', '').strip().split(',')]
+            equations = []
+            all_vars = set()
+            for part in parts:
+                part = _clean_expr(part)
+                if '=' in part:
+                    lhs, rhs = part.split('=', 1)
+                    eq = sp.Eq(_smart_sympify(lhs), _smart_sympify(rhs))
+                else:
+                    eq = _smart_sympify(part)
+                equations.append(eq)
+                all_vars.update(eq.free_symbols)
+            vars_list = sorted(all_vars, key=str)
+            res = sp.solve(equations, vars_list)
+            if isinstance(res, dict):
+                res_str = ", ".join(f"{v} = {val}" for v, val in res.items())
+            else:
+                res_str = str(res)
+            return (f"System Solution:\n{res_str}",
+                    f"{sp.latex(res)}")
+
+        # ──────────────────────────────────────────────
+        # 9. EQUATIONS & SOLVE: solve x^2 - 5x + 6 = 0
+        # ──────────────────────────────────────────────
+        if '=' in q or 'solve' in ql:
             clean_q = q.replace('solve', '').strip()
             clean_q = _clean_expr(clean_q)
             if '=' in clean_q:
                 lhs, rhs = clean_q.split('=', 1)
-                eq = sp.Eq(sp.sympify(lhs), sp.sympify(rhs))
+                eq = sp.Eq(_smart_sympify(lhs), _smart_sympify(rhs))
             else:
-                eq = sp.sympify(clean_q)
+                eq = _smart_sympify(clean_q)
             res = sp.solve(eq)
             if isinstance(res, list):
                 res_str = ", ".join(str(val) for val in res)
@@ -1829,74 +2018,123 @@ def solve_math_sympy(query: str):
                 res_str = str(res)
             return f"Solution: x = {res_str}", f"x = {sp.latex(res)}"
 
+        # ──────────────────────────────────────────────
+        # 10. TRIG SIMPLIFICATION & GENERAL SIMPLIFY
+        # ──────────────────────────────────────────────
         clean_q = _clean_expr(q)
-        expr = sp.sympify(clean_q)
+        expr = _smart_sympify(clean_q)
+
+        # Try trig simplification first
+        trig_simplified = sp.trigsimp(expr)
         simplified = sp.simplify(expr)
-        evaluated = repr(simplified)
+        # Use whichever is shorter/simpler
+        result = trig_simplified if len(str(trig_simplified)) <= len(str(simplified)) else simplified
+
+        if result != expr:
+            text = f"Simplified: {result}"
+        else:
+            text = f"Result: {result}"
+
         try:
-            numeric_val = float(simplified.evalf())
-            evaluated += f" ≈ {numeric_val:.6f}"
+            numeric_val = float(result.evalf())
+            if not result.is_number:
+                text += f" ≈ {numeric_val:.6f}"
         except Exception:
             pass
-        return f"Result: {evaluated}", sp.latex(simplified)
+
+        return text, sp.latex(result)
     except Exception as e:
-        logging.warning(f"[SYMPY] SymPy not available or expression error: {e}")
+        logging.warning(f"[SYMPY] Expression error for '{query}': {e}")
         return None, None
 
 
 def prepare_plot_expression(expr_str: str) -> 'str | None':
-    """Cleans and validates plot function string for Matplotlib eval."""
+    """Validates and prepares a single-variable function string for Matplotlib plotting.
+    Returns None for equations, word problems, matrices, or unparseable expressions."""
     if not expr_str:
         return None
     import re
     s = expr_str.strip()
+
+    # Reject word problems, matrices, multi-line text
+    if any(c in s for c in ['[', '{', '\n']) or len(s) > 120:
+        return None
+    if any(w in s.lower() for w in ['car', 'velocity', 'force', 'mass', 'acceleration', 'ball',
+                                      'meters', 'seconds', 'find', 'what', 'how', 'which']):
+        return None
+
+    # Extract y = f(x) or f(x) = expression
     if '=' in s:
-        if s.lower().startswith('y ='):
+        if s.lower().startswith('y =') or s.lower().startswith('y='):
             s = s.split('=', 1)[1].strip()
-        elif s.lower().startswith('f(x) ='):
+        elif s.lower().startswith('f(x) =') or s.lower().startswith('f(x)='):
             s = s.split('=', 1)[1].strip()
         else:
             return None
+
+    # Must contain 'x' to be plottable
+    if 'x' not in s.lower():
+        return None
+
     s = s.replace('^', '**')
     s = re.sub(r'(\d)([a-zA-Z\(])', r'\1*\2', s)
     s = re.sub(r'(\))(\d|[a-zA-Z])', r'\1*\2', s)
+
+    # Validate it can be evaluated
+    import numpy as np
+    try:
+        x_test = np.array([1.0, 2.0])
+        safe_dict = {'x': x_test, 'np': np, 'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+                     'exp': np.exp, 'log': np.log, 'sqrt': np.sqrt, 'pi': np.pi}
+        result = eval(s, {"__builtins__": None}, safe_dict)
+        if not isinstance(result, np.ndarray):
+            return None
+    except Exception:
+        return None
+
     return s
 
 
-def render_math_card(query: str, solution_text: str, formula_tex: str = None, plot_func_str: str = None) -> BytesIO:
-    """Renders a high-resolution dark-mode Math Infographic Card PNG."""
+def render_math_card(query: str, solution_text: str, formula_tex: str = None,
+                     plot_func_str: str = None, engine_name: str = "Valence Math Engine") -> 'BytesIO':
+    """Renders a premium high-resolution dark-mode Math Infographic Card PNG with dynamic layout."""
+    import matplotlib
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.patches import FancyBboxPatch
     import numpy as np
     from io import BytesIO
+    import textwrap
 
     fig = plt.figure(figsize=(11, 6.5), dpi=180, facecolor='#18191C')
-    
+
     # Outer Card Frame
     card_ax = fig.add_axes([0, 0, 1, 1], facecolor='#18191C')
     card_ax.axis('off')
-    
+
     # Inner Content Box with rounded corners
     fancy_box = FancyBboxPatch((0.03, 0.04), 0.94, 0.92, boxstyle="round,pad=0.02,rounding_size=0.03",
                               facecolor='#2B2D31', edgecolor='#5865F2', linewidth=2.5)
     card_ax.add_patch(fancy_box)
-    
+
     # Top Banner Box
     banner = FancyBboxPatch((0.04, 0.84), 0.92, 0.10, boxstyle="round,pad=0.01,rounding_size=0.02",
                            facecolor='#1E1F22', edgecolor='#5865F2', linewidth=1.5)
     card_ax.add_patch(banner)
-    
+
     clean_query = query.replace('$$', '').replace('$', '')
     card_ax.text(0.07, 0.90, "MATHEMATICS & PHYSICS ENGINE", color='#5865F2', fontsize=16, fontweight='bold', va='center')
     card_ax.text(0.07, 0.86, f"Query: {clean_query[:65]}", color='#B5BAC1', fontsize=11, va='center')
-    
+
     # Prepare plottable function and evaluate array
     valid_plot_str = prepare_plot_expression(plot_func_str)
     y_vals = None
+    x_vals = None
     if valid_plot_str:
         try:
             x_vals = np.linspace(-5, 5, 400)
-            safe_dict = {'x': x_vals, 'np': np, 'sin': np.sin, 'cos': np.cos, 'tan': np.tan, 'exp': np.exp, 'log': np.log, 'sqrt': np.sqrt, 'pi': np.pi}
+            safe_dict = {'x': x_vals, 'np': np, 'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+                        'exp': np.exp, 'log': np.log, 'sqrt': np.sqrt, 'pi': np.pi}
             computed_y = eval(valid_plot_str, {"__builtins__": None}, safe_dict)
             if isinstance(computed_y, np.ndarray) and computed_y.shape == x_vals.shape:
                 y_vals = computed_y
@@ -1908,14 +2146,27 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
         text_ax = fig.add_axes([0.06, 0.08, 0.44, 0.72], facecolor='#1E1F22')
         text_ax.axis('off')
         plot_ax = fig.add_axes([0.54, 0.10, 0.40, 0.68], facecolor='#1E1F22')
-        
-        plot_ax.plot(x_vals, y_vals, color='#00D4FF', linewidth=2.5, label=f"y = {valid_plot_str[:25]}")
+
+        # Clip extreme y values for better visualization
+        y_finite = y_vals[np.isfinite(y_vals)]
+        if len(y_finite) > 0:
+            y_med = np.median(y_finite)
+            y_range = max(np.ptp(y_finite), 1)
+            y_min_clip = y_med - 3 * y_range
+            y_max_clip = y_med + 3 * y_range
+            y_plot = np.clip(y_vals, y_min_clip, y_max_clip)
+        else:
+            y_plot = y_vals
+
+        plot_ax.plot(x_vals, y_plot, color='#00D4FF', linewidth=2.5, label=f"y = {valid_plot_str[:25]}")
+        plot_ax.axhline(y=0, color='#5865F2', linewidth=0.8, alpha=0.5)
+        plot_ax.axvline(x=0, color='#5865F2', linewidth=0.8, alpha=0.5)
         plot_ax.grid(True, color='#35363C', linestyle='--', alpha=0.7)
         plot_ax.set_facecolor('#1E1F22')
-        plot_ax.tick_params(colors='#B5BAC1')
+        plot_ax.tick_params(colors='#B5BAC1', labelsize=8)
         for spine in plot_ax.spines.values():
             spine.set_color('#5865F2')
-        plot_ax.legend(facecolor='#2B2D31', edgecolor='#5865F2', labelcolor='white')
+        plot_ax.legend(facecolor='#2B2D31', edgecolor='#5865F2', labelcolor='white', fontsize=8)
     else:
         text_ax = fig.add_axes([0.06, 0.08, 0.88, 0.72], facecolor='#1E1F22')
         text_ax.axis('off')
@@ -1925,14 +2176,52 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None, pl
                            facecolor='#1E1F22', edgecolor='#35363C', linewidth=1.5, transform=text_ax.transAxes)
     text_ax.add_patch(t_box)
 
-    # Solution Text
-    text_ax.text(0.04, 0.90, "STEP-BY-STEP SOLUTION & RESULT", color='#00D26A', fontsize=12, fontweight='bold', transform=text_ax.transAxes)
-    
-    formatted_solution = solution_text.replace('$$', '').replace('$', '').replace('\r', '')
-    text_ax.text(0.04, 0.80, formatted_solution, color='white', fontsize=10, va='top', fontfamily='monospace', transform=text_ax.transAxes, linespacing=1.5)
+    # Solution Text — dynamic font sizing based on content length
+    text_ax.text(0.04, 0.95, "STEP-BY-STEP SOLUTION & RESULT", color='#00D26A', fontsize=11,
+                fontweight='bold', transform=text_ax.transAxes, va='top')
 
-    # Footer Watermark
-    card_ax.text(0.94, 0.06, "VALENCE MATH ENGINE • POWERED BY WOLFRAM & GEMINI", color='#72767D', fontsize=8, ha='right')
+    formatted_solution = solution_text.replace('$$', '').replace('$', '').replace('\r', '')
+
+    # Dynamic font size: scale down for long solutions
+    line_count = formatted_solution.count('\n') + 1
+    if line_count > 15:
+        font_sz = 7
+    elif line_count > 10:
+        font_sz = 8
+    elif line_count > 6:
+        font_sz = 9
+    else:
+        font_sz = 10
+
+    # Word-wrap long lines
+    wrapped_lines = []
+    max_chars = 55 if (valid_plot_str and y_vals is not None) else 95
+    for line in formatted_solution.split('\n'):
+        if len(line) > max_chars:
+            wrapped_lines.extend(textwrap.wrap(line, width=max_chars))
+        else:
+            wrapped_lines.append(line)
+    wrapped_text = '\n'.join(wrapped_lines[:20])  # Cap at 20 lines
+
+    text_ax.text(0.04, 0.85, wrapped_text, color='white', fontsize=font_sz, va='top',
+                fontfamily='monospace', transform=text_ax.transAxes, linespacing=1.4)
+
+    # Answer Highlight Box — extract and highlight the final answer
+    answer_line = None
+    for line in formatted_solution.split('\n'):
+        ll = line.lower()
+        if any(kw in ll for kw in ['solution:', 'result:', 'final answer:', '= ', 'simplified:']):
+            answer_line = line.strip()
+            break
+    if answer_line:
+        ans_box = FancyBboxPatch((0.02, 0.0), 0.96, 0.10, boxstyle="round,pad=0.005,rounding_size=0.01",
+                                facecolor='#1a3a1a', edgecolor='#00D26A', linewidth=1.2, transform=text_ax.transAxes)
+        text_ax.add_patch(ans_box)
+        text_ax.text(0.04, 0.05, f"✓ {answer_line[:80]}", color='#00D26A', fontsize=9,
+                    fontweight='bold', va='center', transform=text_ax.transAxes, fontfamily='monospace')
+
+    # Footer Watermark with actual engine name
+    card_ax.text(0.94, 0.06, f"VALENCE MATH ENGINE • {engine_name.upper()}", color='#72767D', fontsize=8, ha='right')
 
     buf = BytesIO()
     plt.savefig(buf, format='png', dpi=180, facecolor='#18191C', bbox_inches='tight', pad_inches=0.1)
