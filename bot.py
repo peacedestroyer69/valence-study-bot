@@ -2619,18 +2619,8 @@ async def on_ready():
         for guild in bot.guilds:
             await sync_channel_lockout_permissions(guild)
             for uid, udata in data.get("users", {}).items():
-                uid_int = int(uid)
-                member = guild.get_member(uid_int)
-                # SuperAdmin / Admin Immunity Check
-                if uid_int in (VALENCE_ID, UJJWAL_ID) or (member and member.guild_permissions.administrator):
-                    if udata.get("quarantined"):
-                        udata["quarantined"] = False
-                        data_changed = True
-                    if member:
-                        await remove_quarantine_role(member, reason="SuperAdmin startup quarantine immunity sync")
-                    continue
-
                 if udata.get("quarantined"):
+                    member = guild.get_member(int(uid))
                     if member and not member.bot:
                         await apply_quarantine_role(member, reason="Startup quarantine audit sync")
         if data_changed:
@@ -4345,11 +4335,6 @@ async def test_lockout_command(interaction: discord.Interaction, user: discord.M
     )
     if not is_admin:
         await interaction.response.send_message("❌ Only admins can execute `/test_lockout`.", ephemeral=True)
-        return
-
-    # IMMUNITY: Prevent locking out Valence, Ujjwal, Server Owner, or Administrators
-    if user.id in (VALENCE_ID, UJJWAL_ID) or user.guild_permissions.administrator or interaction.guild.owner_id == user.id:
-        await interaction.response.send_message(f"❌ <@{user.id}> is an Administrator/Owner and is exempt from lockout.", ephemeral=True)
         return
 
     await interaction.response.defer()
