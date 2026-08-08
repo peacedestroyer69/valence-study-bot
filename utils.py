@@ -1765,7 +1765,8 @@ def fetch_wolfram_alpha(query: str) -> str:
 
 
 def fetch_newton_math(query: str) -> str:
-    """Fetch calculus/algebra solutions from the free Newton Math API (newton.vercel.app)."""
+    """Fetch calculus/algebra solutions from the free Newton Math API (newton.vercel.app).
+    Supports: simplify, factor, derive, integrate, zeroes, tangent, evaluate, area, cos/sin/tan/log/abs."""
     import requests
     import urllib.parse
     import re
@@ -1781,6 +1782,7 @@ def fetch_newton_math(query: str) -> str:
             (['zero', 'root', 'roots'], 'zeroes', r'zero(?:e?s)?|roots?|find.*roots?'),
             (['tangent'], 'tangent', r'tangent'),
             (['evaluate', 'eval', 'calculate', 'compute'], 'evaluate', r'evaluate|eval(?:uate)?|calculate|compute'),
+            (['area under', 'definite integral'], 'area', r'area under|definite integral'),
         ]
 
         for keywords, operation, pattern in op_map:
@@ -1792,15 +1794,44 @@ def fetch_newton_math(query: str) -> str:
         if not expr:
             return None
 
-        url = f"https://newton.vercel.app/api/v2/{op}/{urllib.parse.quote(expr)}"
-        resp = requests.get(url, timeout=6)
-        if resp.status_code == 200:
-            data = resp.json()
-            res_val = data.get("result")
-            if res_val and str(res_val).strip():
-                return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
+        # Try primary URL, then fallback
+        urls = [
+            f"https://newton.vercel.app/api/v2/{op}/{urllib.parse.quote(expr)}",
+            f"https://newton.now.sh/api/v2/{op}/{urllib.parse.quote(expr)}",
+        ]
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=6)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    res_val = data.get("result")
+                    if res_val and str(res_val).strip():
+                        return f"Operation: {op.capitalize()}\nInput: {expr}\nResult: {res_val}"
+            except Exception:
+                continue
     except Exception as e:
         logging.warning(f"[NEWTON API] Failed for '{query}': {e}")
+    return None
+
+
+def fetch_mathjs_api(query: str) -> str:
+    """Evaluate math expressions using Math.js REST API (api.mathjs.org).
+    Free, no auth required. Supports: arithmetic, trig, unit conversions, derivatives, GCD/LCM, matrices.
+    Rate limit: 10,000 requests/day."""
+    import requests
+    import urllib.parse
+    try:
+        # Math.js API accepts expressions directly
+        url = f"http://api.mathjs.org/v4/?expr={urllib.parse.quote(query)}&precision=10"
+        resp = requests.get(url, timeout=8)
+        if resp.status_code == 200 and resp.text.strip():
+            result = resp.text.strip()
+            # Filter out unhelpful results
+            if result.lower() in ['undefined', 'nan', 'infinity', '-infinity']:
+                return None
+            return f"Result: {result}"
+    except Exception as e:
+        logging.warning(f"[MATH.JS API] Failed for '{query}': {e}")
     return None
 
 

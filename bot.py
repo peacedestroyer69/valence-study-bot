@@ -3891,11 +3891,11 @@ async def chem_command(interaction: discord.Interaction, molecule: str, title: s
 )
 async def math_command(interaction: discord.Interaction, expression: str, title: str = "Mathematics & Physics Engine"):
     """Solves math & physics: algebra, calculus, limits, series, matrices, trig, systems, and physics word problems.
-    Tier 1: SymPy (instant) -> Tier 2: WolframAlpha -> Tier 3: Newton API -> Tier 4: Gemini AI (word problems only)."""
+    Tier 1: SymPy (instant) -> Tier 2: Math.js API -> Tier 3: WolframAlpha -> Tier 4: Newton API -> Tier 5: Gemini AI."""
     await interaction.response.defer()
     try:
         import time as _time
-        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, render_math_card
+        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, fetch_mathjs_api, render_math_card
         from cogs.gemini_brain import fetch_gemini_math_info
 
         t_start = _time.monotonic()
@@ -3911,24 +3911,33 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
             source = "SymPy Engine"
             solution_str = sy_text
             formula_tex = sy_tex
-            logging.info(f"[/math] SymPy success for: {q_clean}")
+            logging.info(f"[/math] Tier 1 SymPy success for: {q_clean}")
 
-        # Tier 2: WolframAlpha API (for complex queries SymPy can't parse)
+        # Tier 2: Math.js REST API (free, no auth — arithmetic, units, GCD, derivatives)
+        if not solution_str:
+            mjs_res = await asyncio.to_thread(fetch_mathjs_api, q_clean)
+            if mjs_res:
+                source = "Math.js API"
+                solution_str = mjs_res
+                logging.info(f"[/math] Tier 2 Math.js success for: {q_clean}")
+
+        # Tier 3: WolframAlpha API (for complex queries — requires API key)
         if not solution_str:
             wf_res = await asyncio.to_thread(fetch_wolfram_alpha, q_clean)
             if wf_res:
                 source = "WolframAlpha API"
                 solution_str = f"Result: {wf_res}"
-                logging.info(f"[/math] WolframAlpha success for: {q_clean}")
+                logging.info(f"[/math] Tier 3 WolframAlpha success for: {q_clean}")
 
-        # Tier 3: Newton Math API (free calculus fallback)
+        # Tier 4: Newton Math API (free calculus microservice)
         if not solution_str:
             nt_res = await asyncio.to_thread(fetch_newton_math, q_clean)
             if nt_res:
                 source = "Newton Math API"
                 solution_str = nt_res
+                logging.info(f"[/math] Tier 4 Newton success for: {q_clean}")
 
-        # Tier 4: Gemini AI (ONLY for word problems / physics that can't be solved symbolically)
+        # Tier 5: Gemini AI (ONLY for word problems / physics that can't be solved symbolically)
         if not solution_str:
             gem_data = await fetch_gemini_math_info(q_clean)
             if gem_data:
