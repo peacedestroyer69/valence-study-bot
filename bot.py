@@ -356,14 +356,14 @@ async def save_data(data: dict):
             temp_file = f"{DATA_FILE}.tmp"
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            # Atomic rename
+            # Atomic replace
             if os.path.exists(DATA_FILE):
-                # Save backup
                 backup_file = f"{DATA_FILE}.bak"
-                if os.path.exists(backup_file):
-                    os.remove(backup_file)
-                os.rename(DATA_FILE, backup_file)
-            os.rename(temp_file, DATA_FILE)
+                try:
+                    os.replace(DATA_FILE, backup_file)
+                except Exception:
+                    pass
+            os.replace(temp_file, DATA_FILE)
         except (IOError, OSError) as e:
             logging.error(f"Failed to save data file: {e}")
 
