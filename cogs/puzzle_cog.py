@@ -896,6 +896,11 @@ class PuzzleCog(commands.Cog):
             if channel is None:
                 channel = await self.bot.fetch_channel(PUZZLE_CHANNEL_ID)
 
+            # ── PUZZLE SOURCE LABEL ──
+            puzzle_source = puzzle.get("source", "unknown")
+            source_tag = "🤖 AI Generated" if puzzle_source == "ai_generated" else "📦 Curated Fallback"
+            logging.info(f"[PUZZLE] Daily puzzle source: {puzzle_source}")
+
             # ── READABILITY CHECKPOINT ──
             checkpoint = _readability_checkpoint(puzzle)
             opts = checkpoint['options_text']
@@ -952,7 +957,7 @@ class PuzzleCog(commands.Cog):
                     color=0x5865F2,
                 )
                 embed2.add_field(name="\U0001f4cb Rules", value=rules_text, inline=False)
-                embed2.set_footer(text="YPT Study Bot \u2022 Puzzle of the Day \u2022 Deadline: 11:59 PM IST")
+                embed2.set_footer(text=f"YPT Study Bot \u2022 Puzzle of the Day \u2022 {source_tag} \u2022 Deadline: 11:59 PM IST")
                 embeds_to_send = [embed1, embed2]
             else:
                 # ── SINGLE MESSAGE: Fits in one embed ──
@@ -969,7 +974,7 @@ class PuzzleCog(commands.Cog):
                     else:
                         embed.set_thumbnail(url='attachment://chem_structure.png')
                 embed.add_field(name="\U0001f4cb Rules", value=rules_text, inline=False)
-                embed.set_footer(text="YPT Study Bot \u2022 Puzzle of the Day \u2022 Deadline: 11:59 PM IST")
+                embed.set_footer(text=f"YPT Study Bot \u2022 Puzzle of the Day \u2022 {source_tag} \u2022 Deadline: 11:59 PM IST")
                 embeds_to_send = [embed]
 
             alert_msg = await channel.send(
@@ -987,6 +992,11 @@ class PuzzleCog(commands.Cog):
             view = PuzzleAnswerView(self)
             for member in channel.guild.members:
                 if member.bot:
+                    continue
+                # Skip quarantined/locked-out users — no DMs until they /verify
+                uid_check = str(member.id)
+                udata_check = data.get("users", {}).get(uid_check, {})
+                if udata_check.get("quarantined", False):
                     continue
                 try:
                     if needs_split:
@@ -1479,7 +1489,16 @@ class PuzzleCog(commands.Cog):
                     )
                     await member.send(embed=embed)
                 except (discord.Forbidden, discord.HTTPException):
-                    pass
+                    # DMs disabled — post lockout notice in channel as fallback
+                    try:
+                        fallback_ch = await self.bot.get_or_fetch_channel(GENERAL_CHANNEL_ID)
+                        if fallback_ch:
+                            await fallback_ch.send(
+                                f"📨 <@{member.id}> — I couldn't DM you the lockout notice. "
+                                f"Use `/verify` in this channel to solve puzzles and regain access."
+                            )
+                    except Exception:
+                        pass
 
                 logging.info(f"[PUZZLE] Placed {member.display_name} on probation for unsolved puzzle")
                 await asyncio.sleep(1)
@@ -1562,6 +1581,11 @@ class PuzzleCog(commands.Cog):
 
             for member in guild.members:
                 if member.bot:
+                    continue
+                # Skip quarantined/locked-out users — no DMs until they /verify
+                uid_check = str(member.id)
+                udata_check = data.get("users", {}).get(uid_check, {})
+                if udata_check.get("quarantined", False):
                     continue
 
                 uid = str(member.id)
@@ -1731,19 +1755,34 @@ class PuzzleCog(commands.Cog):
 
                 if result_holder.get("correct"):
                     score += 1
-                    await interaction.user.send(
-                        f"✅ **Correct!** {result_holder['explanation']}"
+                    expl = result_holder.get("explanation", "")
+                    result_embed = discord.Embed(
+                        title=f"✅ Correct! (Puzzle {i}/{VERIFY_PUZZLES_REQUIRED})",
+                        description=expl[:4000] if expl else "Well done!",
+                        color=0x57F287,
                     )
+                    try:
+                        await interaction.user.send(embed=result_embed)
+                    except Exception as send_err:
+                        logging.warning(f"[VERIFY] Failed to send correct embed: {send_err}")
                 else:
                     chosen = result_holder.get("chosen", "?")
                     correct = result_holder.get("answer", "?")
                     expl = result_holder.get("explanation", "")
-                    await interaction.user.send(
-                        f"❌ **Wrong!** You chose **{chosen}**, correct was **{correct}**.\n"
-                        f"📖 {expl}\n\n"
-                        f"Verification failed. You solved {score}/{VERIFY_PUZZLES_REQUIRED} puzzles.\n"
-                        f"Wait {VERIFY_COOLDOWN_HOURS}h before trying again."
+                    result_embed = discord.Embed(
+                        title=f"❌ Wrong! (Puzzle {i}/{VERIFY_PUZZLES_REQUIRED})",
+                        description=(
+                            f"You chose **{chosen}**, correct was **{correct}**.\n\n"
+                            f"📖 {expl[:3800]}\n\n"
+                            f"Verification failed. You solved {score}/{VERIFY_PUZZLES_REQUIRED} puzzles.\n"
+                            f"Wait {VERIFY_COOLDOWN_HOURS}h before trying again."
+                        ),
+                        color=0xED4245,
                     )
+                    try:
+                        await interaction.user.send(embed=result_embed)
+                    except Exception as send_err:
+                        logging.warning(f"[VERIFY] Failed to send wrong embed: {send_err}")
                     async with self.bot.db_write_lock:
                         fresh_data = await self.bot.load_data()
                         fresh_udata = fresh_data.setdefault("users", {}).setdefault(uid, {})

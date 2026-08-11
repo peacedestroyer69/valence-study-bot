@@ -1305,15 +1305,22 @@ Respond ONLY with a JSON object:
             logging.warning(f"[PUZZLE PIPELINE] Solver 2 parsing failed: {e}")
             continue
 
-        logging.info(f"[PUZZLE PIPELINE] Puzzle successfully verified twice! Topic: {topic}, Weekly: {is_weekly}")
+        logging.info(f"[PUZZLE PIPELINE] ✅ Puzzle successfully verified twice! Topic: {topic}, Weekly: {is_weekly}")
         # Return candidate intact (raw LaTeX preserved for mathtext image renderer; readability checkpoint in puzzle_cog will handle Discord text sanitization)
+        candidate["source"] = "ai_generated"
         return candidate
 
-    logging.warning("[PUZZLE PIPELINE] All attempts failed to verify. Using static fallback.")
+    logging.error(
+        f"[PUZZLE PIPELINE] ❌ ALL 3 ATTEMPTS FAILED for topic='{topic}', weekly={is_weekly}. "
+        f"Falling back to static curated puzzle. Check API key rotation, Gemini quota, and JSON parsing above."
+    )
     if is_weekly:
-        return random.choice(_FALLBACK_WEEKLY_PUZZLES)
+        fb = random.choice(_FALLBACK_WEEKLY_PUZZLES)
     else:
-        return random.choice(_FALLBACK_PUZZLES)
+        fb = random.choice(_FALLBACK_PUZZLES)
+    fb = dict(fb)  # shallow copy so we don't mutate the static bank
+    fb["source"] = "fallback_curated"
+    return fb
 
 _FALLBACK_KICK_MESSAGES = [
     "{username}, {hours_today}h today? That's how you prepare for JEE? Your {hours_alltime}h all-time is laughing at your {streak}-day streak. You've missed {missed_days} days. Get back to work.",

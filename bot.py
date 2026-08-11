@@ -561,6 +561,26 @@ async def setup_hook():
 
 bot.setup_hook = setup_hook
 
+@bot.tree.interaction_check
+async def global_lockout_check(interaction: discord.Interaction) -> bool:
+    """Block all slash commands for quarantined/locked-out users except /verify."""
+    if interaction.command and interaction.command.name == "verify":
+        return True
+    if interaction.guild:
+        member = interaction.guild.get_member(interaction.user.id)
+        if member:
+            # Check Firestore quarantine flag
+            data = await bot.load_data()
+            uid = str(member.id)
+            udata = data.get("users", {}).get(uid, {})
+            if udata.get("quarantined", False):
+                await interaction.response.send_message(
+                    "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                    ephemeral=True,
+                )
+                return False
+    return True
+
 
 # ============================================================
 # SECTION 5: LEADERBOARD HELPERS

@@ -377,6 +377,11 @@ class DisciplineCog(commands.Cog):
 
         for uid_str in list(users.keys()):
             my_data = users[uid_str]
+
+            # Skip quarantined/locked-out users — no DMs until they /verify
+            if my_data.get("quarantined", False):
+                continue
+
             my_seconds = user_yesterday_seconds.get(uid_str, 0)
             strikes = my_data.get("discipline_strikes", 0)
 
@@ -525,7 +530,8 @@ class DisciplineCog(commands.Cog):
                             )
                             await member.send(embed=embed)
                         except discord.Forbidden:
-                            pass
+                            # DMs disabled — public notice already posted below
+                            logging.warning(f"[DISCIPLINE] Cannot DM probation notice to {uid_str} (DMs disabled)")
 
                         await general_channel.send(
                             f"🔒 <@{uid_str}> has been placed on **PROBATION / LOCKOUT** "
@@ -603,6 +609,10 @@ class DisciplineCog(commands.Cog):
 
             for uid_str in list(users.keys()):
                 my_data = users[uid_str]
+
+                # Skip quarantined/locked-out users — no DMs until they /verify
+                if my_data.get("quarantined", False):
+                    continue
 
                 # STATE CHECK: skip users who are already grinding or done for the day
                 state = await self._get_user_study_state(guild, uid_str, my_data, now_ist)
@@ -738,6 +748,10 @@ class DisciplineCog(commands.Cog):
             for uid_str in list(users.keys()):
                 try:
                     my_data = users[uid_str]
+
+                    # Skip quarantined/locked-out users — no DMs until they /verify
+                    if my_data.get("quarantined", False):
+                        continue
 
                     # STUDY STATE (must be awaited)
                     state = await self._get_user_study_state(guild, uid_str, my_data, now_ist)
