@@ -3979,11 +3979,44 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
         )
 
         file = discord.File(img_buf, filename="math_solution.png")
+
+        # Build Unicode-beautified text for embed description
+        from utils import beautify_math_output, latex_to_unicode
+        pretty_solution = beautify_math_output(solution_str)
+
+        # Extract the key answer line for embed description
+        answer_preview = ""
+        for line in pretty_solution.split('\n'):
+            ll = line.lower()
+            if any(kw in ll for kw in ['solution:', 'result:', 'final answer:', '= ', 'simplified:', 'det(', 'eigenvalue']):
+                answer_preview = line.strip()
+                break
+        if not answer_preview and pretty_solution:
+            answer_preview = pretty_solution.split('\n')[0][:120]
+
+        desc_parts = [f"*Engine: {source}* • Solved in `{t_elapsed:.2f}s`"]
+        if answer_preview:
+            desc_parts.append(f"```\n{answer_preview[:200]}\n```")
+
         embed = discord.Embed(
             title=f"🧮 {title}",
-            description=f"*Engine: {source}* • Solved in `{t_elapsed:.2f}s`",
+            description="\n".join(desc_parts),
             color=0x5865F2
         )
+
+        # Add LaTeX → Unicode formula field for complex expressions
+        if formula_tex and len(formula_tex.strip()) > 2:
+            try:
+                unicode_formula = latex_to_unicode(formula_tex)
+                if unicode_formula and len(unicode_formula.strip()) > 1:
+                    embed.add_field(
+                        name="📐 Formula",
+                        value=f"`{unicode_formula[:1020]}`",
+                        inline=False
+                    )
+            except Exception:
+                pass
+
         embed.set_image(url="attachment://math_solution.png")
         embed.set_footer(text=f"Query: {q_clean[:100]} • YPT Study Bot Math Engine")
         await interaction.followup.send(embed=embed, file=file)

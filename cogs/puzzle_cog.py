@@ -902,43 +902,75 @@ class PuzzleCog(commands.Cog):
             options_str = "\n".join(f"**{k}.** {v}" for k, v in opts.items())
 
             desc_text = f"**{checkpoint['question_text']}**\n\n{options_str}"
-            if len(desc_text) > 4096:
-                desc_text = desc_text[:4093] + "..."
 
-            embed = discord.Embed(
-                title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')}",
-                description=desc_text,
-                color=0x5865F2,
-            )
+            # ── SMART SPLIT LOGIC: If puzzle is too long, split into 2 messages ──
+            EMBED_DESC_LIMIT = 4096
+            needs_split = len(desc_text) > EMBED_DESC_LIMIT
 
             # Attach math image if checkpoint decided it's needed
             puzzle_file = None
             if checkpoint['use_image'] and checkpoint['question_image']:
                 puzzle_file = discord.File(checkpoint['question_image'], filename='puzzle_math.png')
-                embed.set_image(url='attachment://puzzle_math.png')
 
             # Attach chemistry structure image if checkpoint detected chemistry
             chem_file = None
             if checkpoint.get('has_chemistry') and checkpoint.get('chemistry_image'):
                 chem_file = discord.File(checkpoint['chemistry_image'], filename='chem_structure.png')
-                # If no math image, use the chemistry image as the main embed image
-                if not puzzle_file:
-                    embed.set_image(url='attachment://chem_structure.png')
-                else:
-                    # Add as thumbnail if math image already occupies the main slot
-                    embed.set_thumbnail(url='attachment://chem_structure.png')
 
-            embed.add_field(
-                name="\U0001f4cb Rules",
-                value=(
-                    "\u2022 Click A/B/C/D below with your answer\n"
-                    "\u2022 Unlimited attempts \u2014 but solve it by **midnight IST**\n"
-                    "\u2022 **Fail to solve \u2192 you get kicked from the server**\n"
-                    "\u2022 To rejoin after kick: `/verify` and solve 3 archived puzzles"
-                ),
-                inline=False,
+            rules_text = (
+                "\u2022 Click A/B/C/D below with your answer\n"
+                "\u2022 Unlimited attempts \u2014 but solve it by **midnight IST**\n"
+                "\u2022 **Fail to solve \u2192 you get kicked from the server**\n"
+                "\u2022 To rejoin after kick: `/verify` and solve 3 archived puzzles"
             )
-            embed.set_footer(text="YPT Study Bot \u2022 Puzzle of the Day \u2022 Deadline: 11:59 PM IST")
+
+            if needs_split:
+                # ── MESSAGE 1: Question text + images ──
+                question_desc = f"**{checkpoint['question_text']}**"
+                if len(question_desc) > EMBED_DESC_LIMIT:
+                    question_desc = question_desc[:EMBED_DESC_LIMIT - 3] + "..."
+
+                embed1 = discord.Embed(
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (1/2)",
+                    description=question_desc,
+                    color=0x5865F2,
+                )
+                if puzzle_file:
+                    embed1.set_image(url='attachment://puzzle_math.png')
+                elif chem_file:
+                    embed1.set_image(url='attachment://chem_structure.png')
+                embed1.set_footer(text="Part 1 of 2 \u2022 Options in next message \u2192")
+
+                # ── MESSAGE 2: Options + rules + answer buttons ──
+                options_desc = f"\u2b07\ufe0f **Answer Options:**\n\n{options_str}"
+                if len(options_desc) > EMBED_DESC_LIMIT:
+                    options_desc = options_desc[:EMBED_DESC_LIMIT - 3] + "..."
+
+                embed2 = discord.Embed(
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (2/2)",
+                    description=options_desc,
+                    color=0x5865F2,
+                )
+                embed2.add_field(name="\U0001f4cb Rules", value=rules_text, inline=False)
+                embed2.set_footer(text="YPT Study Bot \u2022 Puzzle of the Day \u2022 Deadline: 11:59 PM IST")
+                embeds_to_send = [embed1, embed2]
+            else:
+                # ── SINGLE MESSAGE: Fits in one embed ──
+                embed = discord.Embed(
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')}",
+                    description=desc_text,
+                    color=0x5865F2,
+                )
+                if puzzle_file:
+                    embed.set_image(url='attachment://puzzle_math.png')
+                if chem_file:
+                    if not puzzle_file:
+                        embed.set_image(url='attachment://chem_structure.png')
+                    else:
+                        embed.set_thumbnail(url='attachment://chem_structure.png')
+                embed.add_field(name="\U0001f4cb Rules", value=rules_text, inline=False)
+                embed.set_footer(text="YPT Study Bot \u2022 Puzzle of the Day \u2022 Deadline: 11:59 PM IST")
+                embeds_to_send = [embed]
 
             alert_msg = await channel.send(
                 "\U0001f9e9 **Daily Puzzle is in your DMs!** Check your DMs and solve it before midnight or get kicked."
@@ -957,19 +989,34 @@ class PuzzleCog(commands.Cog):
                 if member.bot:
                     continue
                 try:
-                    # Build file list for DM
-                    dm_files = []
-                    if puzzle_file:
-                        puzzle_file.reset()
-                        dm_files.append(puzzle_file)
-                    if chem_file:
-                        chem_file.reset()
-                        dm_files.append(chem_file)
-                    
-                    if dm_files:
-                        await member.send(embed=embed, view=view, files=dm_files)
+                    if needs_split:
+                        # Split send: msg 1 = question + images, msg 2 = options + buttons
+                        dm_files_1 = []
+                        if puzzle_file:
+                            puzzle_file.reset()
+                            dm_files_1.append(puzzle_file)
+                        if chem_file:
+                            chem_file.reset()
+                            dm_files_1.append(chem_file)
+                        if dm_files_1:
+                            await member.send(embed=embeds_to_send[0], files=dm_files_1)
+                        else:
+                            await member.send(embed=embeds_to_send[0])
+                        await asyncio.sleep(0.3)
+                        await member.send(embed=embeds_to_send[1], view=view)
                     else:
-                        await member.send(embed=embed, view=view)
+                        # Single send
+                        dm_files = []
+                        if puzzle_file:
+                            puzzle_file.reset()
+                            dm_files.append(puzzle_file)
+                        if chem_file:
+                            chem_file.reset()
+                            dm_files.append(chem_file)
+                        if dm_files:
+                            await member.send(embed=embeds_to_send[0], view=view, files=dm_files)
+                        else:
+                            await member.send(embed=embeds_to_send[0], view=view)
                     dm_count += 1
                     await asyncio.sleep(0.5)
                 except discord.Forbidden:

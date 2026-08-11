@@ -2162,9 +2162,60 @@ def prepare_plot_expression(expr_str: str) -> 'str | None':
     return s
 
 
+def beautify_math_output(text: str) -> str:
+    """Convert raw SymPy/API output text to rich Unicode for Discord display.
+    Converts: ** → superscripts, pi → π, sqrt → √, oo → ∞, common patterns."""
+    import re
+    if not text:
+        return text
+
+    s = text
+
+    # ── Superscripts: x**2 → x², x**3 → x³, etc. ──
+    _sup_map = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+                '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+                'n': 'ⁿ', '-': '⁻', '+': '⁺', '(': '⁽', ')': '⁾'}
+
+    def _to_superscript(m):
+        exp = m.group(1)
+        sup = ''.join(_sup_map.get(c, c) for c in exp)
+        return sup
+
+    # x**2 → x²  (single digit/simple exponents)
+    s = re.sub(r'\*\*\(([^)]+)\)', _to_superscript, s)
+    s = re.sub(r'\*\*(-?\d+)', _to_superscript, s)
+
+    # ── Subscripts for common patterns ──
+    _sub_map = {'0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+                '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+                'n': 'ₙ', 'k': 'ₖ', 'i': 'ᵢ'}
+
+    # ── Mathematical constants & symbols ──
+    s = s.replace('pi**2', 'π²')
+    s = s.replace('pi', 'π')
+    s = s.replace(' oo', ' ∞').replace('(oo', '(∞').replace('=oo', '=∞')
+    s = s.replace('-oo', '-∞')
+    s = s.replace('zoo', '∞̃')  # complex infinity
+    s = re.sub(r'\bsqrt\(([^)]+)\)', r'√(\1)', s)
+    s = s.replace('Abs(', '|').replace(')', '|', 1) if 'Abs(' in s else s
+
+    # ── Multiplication cleanup ──
+    s = s.replace('*', '·')  # Use middle dot instead of asterisk
+
+    # ── Greek letters in output ──
+    _greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ',
+              'epsilon': 'ε', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ',
+              'sigma': 'σ', 'omega': 'ω', 'phi': 'φ', 'psi': 'ψ'}
+    for name, sym in _greek.items():
+        s = re.sub(rf'\b{name}\b', sym, s, flags=re.IGNORECASE)
+
+    return s
+
+
 def render_math_card(query: str, solution_text: str, formula_tex: str = None,
                      plot_func_str: str = None, engine_name: str = "Valence Math Engine") -> 'BytesIO':
-    """Renders a premium high-resolution dark-mode Math Infographic Card PNG with dynamic layout."""
+    """Renders a premium high-resolution dark-mode Math Infographic Card PNG with dynamic layout.
+    If formula_tex is provided, renders it as formatted math via matplotlib's mathtext engine."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -2208,9 +2259,34 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None,
         except Exception:
             y_vals = None
 
+    # ── LaTeX Formula Rendering ──
+    has_latex = False
+    latex_height = 0
+    if formula_tex and len(formula_tex.strip()) > 2:
+        try:
+            # Clean the LaTeX for matplotlib mathtext
+            clean_tex = formula_tex.strip()
+            # Wrap in $ for matplotlib mathtext if not already
+            if not clean_tex.startswith('$'):
+                clean_tex = f'${clean_tex}$'
+            # Test render — if it fails, we fall back gracefully
+            fig_test = plt.figure(figsize=(1, 1))
+            ax_test = fig_test.add_subplot(111)
+            t = ax_test.text(0.5, 0.5, clean_tex, fontsize=14, color='white')
+            fig_test.canvas.draw()
+            plt.close(fig_test)
+            has_latex = True
+            latex_height = 0.12
+        except Exception:
+            has_latex = False
+            latex_height = 0
+
     # Layout selection: Split layout if plot is valid, otherwise 100% full-width text box
+    text_bottom = 0.08
+    text_height = 0.72 - latex_height
+
     if valid_plot_str and y_vals is not None:
-        text_ax = fig.add_axes([0.06, 0.08, 0.44, 0.72], facecolor='#1E1F22')
+        text_ax = fig.add_axes([0.06, text_bottom, 0.44, text_height], facecolor='#1E1F22')
         text_ax.axis('off')
         plot_ax = fig.add_axes([0.54, 0.10, 0.40, 0.68], facecolor='#1E1F22')
 
@@ -2235,7 +2311,7 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None,
             spine.set_color('#5865F2')
         plot_ax.legend(facecolor='#2B2D31', edgecolor='#5865F2', labelcolor='white', fontsize=8)
     else:
-        text_ax = fig.add_axes([0.06, 0.08, 0.88, 0.72], facecolor='#1E1F22')
+        text_ax = fig.add_axes([0.06, text_bottom, 0.88, text_height], facecolor='#1E1F22')
         text_ax.axis('off')
 
     # Inner text box frame
@@ -2243,11 +2319,35 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None,
                            facecolor='#1E1F22', edgecolor='#35363C', linewidth=1.5, transform=text_ax.transAxes)
     text_ax.add_patch(t_box)
 
-    # Solution Text — dynamic font sizing based on content length
+    # ── LaTeX Formula Box (rendered math) ──
+    if has_latex:
+        try:
+            clean_tex = formula_tex.strip()
+            if not clean_tex.startswith('$'):
+                clean_tex = f'${clean_tex}$'
+            # Position the formula box between banner and solution text
+            if valid_plot_str and y_vals is not None:
+                latex_ax = fig.add_axes([0.06, text_bottom + text_height + 0.01, 0.44, latex_height - 0.02], facecolor='#1a1a2e')
+            else:
+                latex_ax = fig.add_axes([0.06, text_bottom + text_height + 0.01, 0.88, latex_height - 0.02], facecolor='#1a1a2e')
+            latex_ax.axis('off')
+            # Formula box background
+            latex_bg = FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.01,rounding_size=0.02",
+                                     facecolor='#1a1a2e', edgecolor='#7289DA', linewidth=1.2, transform=latex_ax.transAxes)
+            latex_ax.add_patch(latex_bg)
+            latex_ax.text(0.02, 0.85, "FORMULA", color='#7289DA', fontsize=7, fontweight='bold',
+                         transform=latex_ax.transAxes, va='top')
+            latex_ax.text(0.5, 0.35, clean_tex, color='#E8EAED', fontsize=14, ha='center', va='center',
+                         transform=latex_ax.transAxes)
+        except Exception:
+            pass  # If LaTeX rendering fails, just skip it silently
+
+    # ── Solution Text with Unicode beautification ──
     text_ax.text(0.04, 0.95, "STEP-BY-STEP SOLUTION & RESULT", color='#00D26A', fontsize=11,
                 fontweight='bold', transform=text_ax.transAxes, va='top')
 
-    formatted_solution = solution_text.replace('$$', '').replace('$', '').replace('\r', '')
+    # Apply Unicode beautification to solution text
+    formatted_solution = beautify_math_output(solution_text.replace('$$', '').replace('$', '').replace('\r', ''))
 
     # Dynamic font size: scale down for long solutions
     line_count = formatted_solution.count('\n') + 1
