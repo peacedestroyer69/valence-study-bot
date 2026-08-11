@@ -3948,8 +3948,18 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
                 plot_expr = gem_data.get("plot_expression")
 
         # Fallback text if all engines returned empty
+        is_unsolved = False
         if not solution_str:
-            solution_str = f"Expression: {q_clean}\n\nCould not solve. Try rephrasing or simplifying."
+            is_unsolved = True
+            solution_str = (
+                f"Expression: {q_clean}\n\n"
+                "❌ Could not solve automatically.\n\n"
+                "💡 Input Tips:\n"
+                "• Algebra/Equations: use 'solve x^2 - 5x + 6 = 0'\n"
+                "• Calculus: use 'derivative of sin(x)' or 'integrate x^2'\n"
+                "• Units: use '100 km/h to m/s' or '5 inches to cm'\n"
+                "• Word/Physics Problems: describe in full sentences for AI"
+            )
 
         # Smart plot detection: only for single-variable function expressions
         if not plot_expr:
@@ -3993,18 +4003,19 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
         if not answer_preview and pretty_solution:
             answer_preview = pretty_solution.split('\n')[0][:120]
 
+        embed_color = 0xED4245 if is_unsolved else 0x5865F2
         desc_parts = [f"*Engine: {source}* • Solved in `{t_elapsed:.2f}s`"]
-        if answer_preview:
+        if answer_preview and not is_unsolved:
             desc_parts.append(f"```\n{answer_preview[:200]}\n```")
 
         embed = discord.Embed(
             title=f"🧮 {title}",
             description="\n".join(desc_parts),
-            color=0x5865F2
+            color=embed_color
         )
 
         # Add LaTeX → Unicode formula field for complex expressions
-        if formula_tex and len(formula_tex.strip()) > 2:
+        if formula_tex and len(formula_tex.strip()) > 2 and not is_unsolved:
             try:
                 unicode_formula = latex_to_unicode(formula_tex)
                 if unicode_formula and len(unicode_formula.strip()) > 1:
@@ -4015,6 +4026,18 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
                     )
             except Exception:
                 pass
+
+        if is_unsolved:
+            embed.add_field(
+                name="⚠️ Format Warning & Parameters",
+                value=(
+                    "• **SymPy (Tier 1)**: Pure math notation (`solve`, `d/dx`, `∫`)\n"
+                    "• **Math.js (Tier 2)**: Unit conversion (`100 km/h to m/s`)\n"
+                    "• **Wolfram (Tier 3)**: Knowledge & complex facts\n"
+                    "• **Gemini AI (Tier 5)**: Word/physics problems in plain English"
+                ),
+                inline=False
+            )
 
         embed.set_image(url="attachment://math_solution.png")
         embed.set_footer(text=f"Query: {q_clean[:100]} • YPT Study Bot Math Engine")
