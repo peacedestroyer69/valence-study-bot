@@ -936,7 +936,7 @@ class PuzzleCog(commands.Cog):
                     question_desc = question_desc[:EMBED_DESC_LIMIT - 3] + "..."
 
                 embed1 = discord.Embed(
-                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (1/2)",
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (1/2) [{source_tag}]",
                     description=question_desc,
                     color=0x5865F2,
                 )
@@ -952,7 +952,7 @@ class PuzzleCog(commands.Cog):
                     options_desc = options_desc[:EMBED_DESC_LIMIT - 3] + "..."
 
                 embed2 = discord.Embed(
-                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (2/2)",
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} (2/2) [{source_tag}]",
                     description=options_desc,
                     color=0x5865F2,
                 )
@@ -962,7 +962,7 @@ class PuzzleCog(commands.Cog):
             else:
                 # ── SINGLE MESSAGE: Fits in one embed ──
                 embed = discord.Embed(
-                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')}",
+                    title=f"\U0001f9e9 Puzzle of the Day \u2014 {now_ist.strftime('%d %b %Y')} [{source_tag}]",
                     description=desc_text,
                     color=0x5865F2,
                 )
