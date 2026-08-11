@@ -2171,43 +2171,36 @@ def beautify_math_output(text: str) -> str:
 
     s = text
 
-    # ── Superscripts: x**2 → x², x**3 → x³, etc. ──
+    # ── Step 1: Replace named constants FIRST (before ** gets converted) ──
+    s = re.sub(r'\bpi\b', 'π', s)
+    s = s.replace(' oo', ' ∞').replace('(oo', '(∞').replace('=oo', '=∞')
+    s = s.replace('-oo', '-∞')
+    s = s.replace('zoo', '∞̃')  # complex infinity
+    s = re.sub(r'\bsqrt\(([^)]+)\)', r'√(\1)', s)
+    # Abs(expr) → |expr|
+    s = re.sub(r'\bAbs\(([^)]+)\)', r'|\1|', s)
+
+    # ── Step 2: Greek letters ──
+    _greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ',
+              'epsilon': 'ε', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ',
+              'sigma': 'σ', 'omega': 'ω', 'phi': 'φ', 'psi': 'ψ'}
+    for name, sym in _greek.items():
+        s = re.sub(rf'\b{name}\b', sym, s, flags=re.IGNORECASE)
+
+    # ── Step 3: Superscripts: x**2 → x², x**3 → x³, etc. ──
     _sup_map = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
                 '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
                 'n': 'ⁿ', '-': '⁻', '+': '⁺', '(': '⁽', ')': '⁾'}
 
     def _to_superscript(m):
         exp = m.group(1)
-        sup = ''.join(_sup_map.get(c, c) for c in exp)
-        return sup
+        return ''.join(_sup_map.get(c, c) for c in exp)
 
-    # x**2 → x²  (single digit/simple exponents)
     s = re.sub(r'\*\*\(([^)]+)\)', _to_superscript, s)
     s = re.sub(r'\*\*(-?\d+)', _to_superscript, s)
 
-    # ── Subscripts for common patterns ──
-    _sub_map = {'0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-                '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-                'n': 'ₙ', 'k': 'ₖ', 'i': 'ᵢ'}
-
-    # ── Mathematical constants & symbols ──
-    s = s.replace('pi**2', 'π²')
-    s = s.replace('pi', 'π')
-    s = s.replace(' oo', ' ∞').replace('(oo', '(∞').replace('=oo', '=∞')
-    s = s.replace('-oo', '-∞')
-    s = s.replace('zoo', '∞̃')  # complex infinity
-    s = re.sub(r'\bsqrt\(([^)]+)\)', r'√(\1)', s)
-    s = s.replace('Abs(', '|').replace(')', '|', 1) if 'Abs(' in s else s
-
-    # ── Multiplication cleanup ──
-    s = s.replace('*', '·')  # Use middle dot instead of asterisk
-
-    # ── Greek letters in output ──
-    _greek = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ',
-              'epsilon': 'ε', 'theta': 'θ', 'lambda': 'λ', 'mu': 'μ',
-              'sigma': 'σ', 'omega': 'ω', 'phi': 'φ', 'psi': 'ψ'}
-    for name, sym in _greek.items():
-        s = re.sub(rf'\b{name}\b', sym, s, flags=re.IGNORECASE)
+    # ── Step 4: Multiplication cleanup: single * → · (but NOT ** which is already handled) ──
+    s = re.sub(r'(?<!\*)\*(?!\*)', '·', s)
 
     return s
 
@@ -2269,14 +2262,12 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None,
             # Wrap in $ for matplotlib mathtext if not already
             if not clean_tex.startswith('$'):
                 clean_tex = f'${clean_tex}$'
-            # Test render — if it fails, we fall back gracefully
-            fig_test = plt.figure(figsize=(1, 1))
-            ax_test = fig_test.add_subplot(111)
-            t = ax_test.text(0.5, 0.5, clean_tex, fontsize=14, color='white')
-            fig_test.canvas.draw()
-            plt.close(fig_test)
-            has_latex = True
-            latex_height = 0.12
+            # Only render LaTeX if it contains actual math notation
+            # (skip trivial results like just a number)
+            has_math_chars = any(c in clean_tex for c in r'\{}^_')
+            if has_math_chars and len(clean_tex) > 5:
+                has_latex = True
+                latex_height = 0.12
         except Exception:
             has_latex = False
             latex_height = 0
