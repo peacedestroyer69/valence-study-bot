@@ -35,4 +35,6 @@ services:
         sync: false
       - key: GEMINI_API_KEY_6
         sync: false
+      - key: WOLFRAM_ALPHA_APP_ID
+        sync: false
 

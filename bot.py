@@ -3895,7 +3895,7 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
     await interaction.response.defer()
     try:
         import time as _time
-        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, fetch_mathjs_api, render_math_card
+        from utils import fetch_wolfram_alpha, solve_math_sympy, fetch_newton_math, fetch_mathjs_api, render_math_card, beautify_math_output, latex_to_unicode
         from cogs.gemini_brain import fetch_gemini_math_info
 
         t_start = _time.monotonic()
@@ -3981,7 +3981,6 @@ async def math_command(interaction: discord.Interaction, expression: str, title:
         file = discord.File(img_buf, filename="math_solution.png")
 
         # Build Unicode-beautified text for embed description
-        from utils import beautify_math_output, latex_to_unicode
         pretty_solution = beautify_math_output(solution_str)
 
         # Extract the key answer line for embed description
