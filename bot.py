@@ -614,6 +614,39 @@ async def global_lockout_check(interaction: discord.Interaction) -> bool:
     return True
 
 
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    """Global interaction handler blocking non-verify button/component clicks for locked-out users."""
+    if interaction.type == discord.InteractionType.component:
+        user = interaction.user
+        if user and user.id not in (VALENCE_ID, UJJWAL_ID):
+            is_admin = interaction.guild and (user.id == interaction.guild.owner_id or getattr(interaction.permissions, "administrator", False))
+            if not is_admin:
+                custom_id = (interaction.data.get("custom_id") or "") if interaction.data else ""
+                if not custom_id.startswith("verify_"):
+                    roles = getattr(user, "roles", [])
+                    has_lockout_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in roles)
+                    is_quarantined_db = False
+                    try:
+                        data = await bot.load_data()
+                        uid = str(user.id)
+                        udata = data.get("users", {}).get(uid, {})
+                        is_quarantined_db = udata.get("quarantined", False)
+                    except Exception:
+                        pass
+
+                    if is_quarantined_db or has_lockout_role:
+                        if not interaction.response.is_done():
+                            try:
+                                await interaction.response.send_message(
+                                    "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                                    ephemeral=True,
+                                )
+                            except Exception:
+                                pass
+                        return
+
+
 # ============================================================
 # SECTION 5: LEADERBOARD HELPERS
 # ============================================================
@@ -2051,7 +2084,8 @@ async def on_message(message: discord.Message):
     if message.guild and isinstance(message.author, discord.Member):
         uid_str = str(message.author.id)
         data = await load_data()
-        has_locked_role = any(r.name == "Locked Out" for r in message.author.roles)
+        udata = data.get("users", {}).get(uid_str, {})
+        has_locked_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in message.author.roles)
         if udata.get("quarantined") or has_locked_role:
             # Allow messaging ONLY in #general and #bot-command so they can use /verify and talk to admins
             allowed_ids = {GENERAL_CHANNEL_ID}
