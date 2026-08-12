@@ -564,21 +564,53 @@ bot.setup_hook = setup_hook
 @bot.tree.interaction_check
 async def global_lockout_check(interaction: discord.Interaction) -> bool:
     """Block all slash commands for quarantined/locked-out users except /verify."""
-    if interaction.command and interaction.command.name == "verify":
+    if not interaction.command:
         return True
+
+    cmd_name = interaction.command.name.lower()
+    qual_name = interaction.command.qualified_name.lower()
+
+    # Allow /verify and admin override commands
+    if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+        return True
+
+    user = interaction.user
+    if not user:
+        return True
+
+    # Bypass for bot owners / server admins
+    if user.id in (VALENCE_ID, UJJWAL_ID):
+        return True
+
     if interaction.guild:
-        member = interaction.guild.get_member(interaction.user.id)
-        if member:
-            # Check Firestore quarantine flag
-            data = await bot.load_data()
-            uid = str(member.id)
-            udata = data.get("users", {}).get(uid, {})
-            if udata.get("quarantined", False):
+        if user.id == interaction.guild.owner_id or getattr(interaction.permissions, "administrator", False):
+            return True
+
+    # Check Discord Roles ("Locked Out", "Quarantined", "Unverified")
+    roles = getattr(user, "roles", [])
+    has_lockout_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in roles)
+
+    # Check Database quarantine flag
+    is_quarantined_db = False
+    try:
+        data = await bot.load_data()
+        uid = str(user.id)
+        udata = data.get("users", {}).get(uid, {})
+        is_quarantined_db = udata.get("quarantined", False)
+    except Exception as e:
+        logging.warning(f"[LOCKOUT CHECK] Could not load DB state for {user.id}: {e}")
+
+    if is_quarantined_db or has_lockout_role:
+        if not interaction.response.is_done():
+            try:
                 await interaction.response.send_message(
                     "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
                     ephemeral=True,
                 )
-                return False
+            except Exception:
+                pass
+        return False
+
     return True
 
 
@@ -2708,6 +2740,8 @@ async def on_member_join(member: discord.Member):
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        return
     if isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(f"⏳ Cooldown! Please try again in {error.retry_after:.1f}s.", ephemeral=True)
     elif isinstance(error, app_commands.MissingPermissions):
