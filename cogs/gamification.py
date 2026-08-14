@@ -8,7 +8,7 @@ import os
 import asyncio
 from utils import (
     get_ist_now, get_ist_date, IST_TZ, UIColors,
-    GENERAL_CHANNEL_ID, VALENCE_ID, UJJWAL_ID
+    GENERAL_CHANNEL_ID, VALENCE_ID, UJJWAL_ID, is_user_locked_out
 )
 
 # Level brackets and role names
@@ -34,6 +34,24 @@ class GamificationCog(commands.Cog):
         self.bot = bot
         # Register a listener for study session updates to sync level roles
         self.boss_battle_check_loop.start()
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
 
     def cog_unload(self):
         self.boss_battle_check_loop.cancel()
@@ -99,6 +117,9 @@ class GamificationCog(commands.Cog):
         # 1. Sync level roles
         data = await self.bot.load_data()
         udata = data.get("users", {}).get(uid, {})
+        if is_user_locked_out(member, udata, member.guild):
+            return
+            
         total_seconds = udata.get("total_seconds_alltime", 0)
         level = int(total_seconds / 3600) + 1
         await self.sync_level_roles(member, level)
@@ -135,8 +156,13 @@ class GamificationCog(commands.Cog):
     # ------------------------------------------------------------------
     @app_commands.command(name="boss", description="View active weekly Co-Op Boss Battle details.")
     async def boss_status(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
         data = await self.bot.load_data()
+        udata = data.get("users", {}).get(str(interaction.user.id), {})
+        if is_user_locked_out(interaction.user, udata, interaction.guild):
+            await interaction.response.send_message("❌ You are currently locked out and cannot use gamification commands.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=False)
         boss = data.setdefault("meta", {}).get("active_boss")
 
         if not boss:
@@ -317,11 +343,17 @@ class GamificationCog(commands.Cog):
     @app_commands.command(name="badges", description="View your earned study badges.")
     @app_commands.describe(user="The user to view badges for (defaults to yourself)")
     async def badges_command(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        data = await self.bot.load_data()
+        udata = data.get("users", {}).get(str(interaction.user.id), {})
+        if is_user_locked_out(interaction.user, udata, interaction.guild):
+            await interaction.response.send_message("❌ You are currently locked out and cannot use gamification commands.", ephemeral=True)
+            return
+
         await interaction.response.defer(ephemeral=False)
         target = user or interaction.user
         uid = str(target.id)
 
-        data = await self.bot.load_data()
+        udata = data.get("users", {}).get(uid, {})
         udata = data.get("users", {}).get(uid, {})
         badges = udata.get("unlocked_badges", [])
 

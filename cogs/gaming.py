@@ -13,7 +13,7 @@ import json
 import os
 import datetime
 import urllib.parse
-from utils import get_ist_now, IST_TZ, GAME_CHANNELS, POKE_TEXT_CHANNEL_ID, GENERAL_CHANNEL_ID, CHESS_TEXT_CHANNEL_ID
+from utils import get_ist_now, IST_TZ, GAME_CHANNELS, POKE_TEXT_CHANNEL_ID, GENERAL_CHANNEL_ID, CHESS_TEXT_CHANNEL_ID, is_user_locked_out
 
 # Top-level DB file operations removed. Using self.bot.load_data() and self.bot.save_data() instead.
 
@@ -103,6 +103,24 @@ class GamingCog(commands.Cog):
         self._session = None
         self.chess_poll_loop.start()
 
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
+
     async def cog_unload(self):
         self.chess_poll_loop.cancel()
         if self._session and not self._session.closed:
@@ -136,6 +154,9 @@ class GamingCog(commands.Cog):
         platform: app_commands.Choice[str],
         username: str,
     ):
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message("❌ You cannot use this command while locked out.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         async with self.bot.db_write_lock:
             data = await self.bot.load_data()
@@ -176,6 +197,9 @@ class GamingCog(commands.Cog):
         time_format: str,
         opponent: discord.Member,
     ):
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message("❌ You cannot use this command while locked out.", ephemeral=True)
+            return
         embed = discord.Embed(
             title="🎮 NEW MATCH STARTED 🎮",
             description=(
@@ -204,6 +228,9 @@ class GamingCog(commands.Cog):
         winner: discord.Member,
         loser: discord.Member,
     ):
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message("❌ You cannot use this command while locked out.", ephemeral=True)
+            return
         if winner.id == loser.id:
             await interaction.response.send_message(
                 "❌ You cannot play a match against yourself!",
@@ -244,6 +271,9 @@ class GamingCog(commands.Cog):
         interaction: discord.Interaction,
         user: discord.Member | None = None,
     ):
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message("❌ You cannot use this command while locked out.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         target = user or interaction.user
         data = await self.bot.load_data()

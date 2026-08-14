@@ -130,10 +130,46 @@ class BonusFeaturesCog(commands.Cog):
         self.break_reminder_check.start()
         self.touch_grass_check.start()
 
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
+
     def cog_unload(self):
         self.weekly_duel_check.cancel()
         self.break_reminder_check.cancel()
         self.touch_grass_check.cancel()
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🚫 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
 
     # ==================================================================
     # COMMAND: /motivate

@@ -62,6 +62,24 @@ class JEEPrepCog(commands.Cog):
         self.bot = bot
         # Socratic AI contexts (user_id -> chat history list)
         self.doubt_contexts = {}
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
         
         # Configure Gemini client
         gemini_key = os.getenv("GEMINI_API_KEY", "")
@@ -76,6 +94,20 @@ class JEEPrepCog(commands.Cog):
 
     def cog_unload(self):
         self.weekly_audit_loop.cancel()
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "❌ You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # 1. PYQ TRACKING

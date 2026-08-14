@@ -193,6 +193,24 @@ class DisciplineCog(commands.Cog):
         self.daily_discipline_check.start()
         self.hourly_nag_check.start()
         self.daily_absence_callout.start()
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
         self.study_gap_reminder_loop.start()
 
     def cog_unload(self):
@@ -238,6 +256,10 @@ class DisciplineCog(commands.Cog):
                 member = await guild.fetch_member(user_id)
             except Exception:
                 member = None
+                
+        if member and any(r.id == 1534636469443100692 for r in member.roles):
+            return False
+            
         if member and member.voice and member.voice.channel:
             cid = member.voice.channel.id
             from utils import POMODORO_CHANNEL_ID
@@ -410,6 +432,9 @@ class DisciplineCog(commands.Cog):
 
                 if not member:
                     logging.info(f"[DISCIPLINE] Skipping strike update for {uid_str} — user has left the server.")
+                    continue
+                    
+                if any(r.id == 1534636469443100692 for r in member.roles):
                     continue
 
                 strikes += 1
@@ -647,6 +672,9 @@ class DisciplineCog(commands.Cog):
                     member = None
                 if not member:
                     continue
+                    
+                if any(r.id == 1534636469443100692 for r in member.roles):
+                    continue
 
                 try:
                     formatted_msg = msg_template.format(
@@ -774,6 +802,9 @@ class DisciplineCog(commands.Cog):
                     except Exception:
                         member = None
                     if not member:
+                        continue
+                        
+                    if any(r.id == 1534636469443100692 for r in member.roles):
                         continue
 
                     # Peer info and today's hours
@@ -977,6 +1008,9 @@ class DisciplineCog(commands.Cog):
                     except Exception:
                         member = None
                 if not member:
+                    continue
+                    
+                if any(r.id == 1534636469443100692 for r in member.roles):
                     continue
 
                 daily_hist = users[uid_str].get("daily_history") or {}

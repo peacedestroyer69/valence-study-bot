@@ -538,6 +538,14 @@ class PuzzleAnswerView(discord.ui.View):
         self.cog = cog
 
     async def _handle_answer(self, interaction: discord.Interaction, chosen: str):
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message(
+                "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                ephemeral=True,
+            )
+            return
+            
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
         now_ist = get_ist_now()
@@ -663,6 +671,14 @@ class WeeklyPuzzleAnswerView(discord.ui.View):
         self.cog = cog
 
     async def _handle_answer(self, interaction: discord.Interaction, chosen: str):
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            await interaction.response.send_message(
+                "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                ephemeral=True,
+            )
+            return
+            
         await interaction.response.defer(ephemeral=True)
         uid = str(interaction.user.id)
 
@@ -821,6 +837,24 @@ class PuzzleCog(commands.Cog):
         self.weekly_puzzle_loop.start()
         self.midnight_kick_loop.start()
         self.morning_wakeup_loop.start()
+
+    async def cog_app_command_check(self, interaction: discord.Interaction) -> bool:
+        cmd_name = getattr(interaction.command, "name", "").lower()
+        qual_name = getattr(interaction.command, "qualified_name", "").lower()
+        if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
+            return True
+        from utils import is_user_locked_out
+        if is_user_locked_out(interaction.user, None, guild=interaction.guild):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(
+                        "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+            return False
+        return True
 
         # Register persistent views
         self.bot.add_view(PuzzleAnswerView(self))
@@ -1649,6 +1683,11 @@ class PuzzleCog(commands.Cog):
         uid = str(interaction.user.id)
         data = await self.bot.load_data()
         udata = data.get("users", {}).get(uid, {})
+
+        from utils import is_user_locked_out
+        if not is_user_locked_out(interaction.user, udata, guild=interaction.guild):
+            await interaction.followup.send("✅ You are not currently locked out.", ephemeral=True)
+            return
 
         now_ist = get_ist_now()
         last_attempt_str = udata.get("puzzle_verify_last")
