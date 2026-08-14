@@ -579,16 +579,31 @@ async def global_lockout_check(interaction: discord.Interaction) -> bool:
     if not user:
         return True
 
-    # Check database quarantine flag
+    # 1. Fast Role check first (by Role ID 1534636469443100692 or names)
+    if is_user_locked_out(user, None, guild=interaction.guild):
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message(
+                    "🔒 You are currently **locked out**. Use `/verify` to solve puzzles and regain access.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+        return False
+
+    # 2. Database check
     udata = {}
     try:
         data = await bot.load_data()
         uid = str(user.id)
-        udata = data.get("users", {}).get(uid, {})
+        if "users" in data and uid in data["users"]:
+            udata = data["users"][uid]
+        else:
+            udata = ensure_user(data, user)
     except Exception as e:
         logging.warning(f"[LOCKOUT CHECK] Could not load DB state for {user.id}: {e}")
 
-    if is_user_locked_out(user, udata, guild=interaction.guild):
+    if udata.get("quarantined", False):
         if not interaction.response.is_done():
             try:
                 await interaction.response.send_message(

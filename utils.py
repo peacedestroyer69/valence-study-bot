@@ -2403,7 +2403,15 @@ def is_user_locked_out(user: discord.User | discord.Member, udata: dict = None, 
 
     roles = getattr(member, "roles", [])
     for r in roles:
-        if r.id == LOCKOUT_ROLE_ID or str(r.id) == "1534636469443100692" or r.name in LOCKOUT_ROLE_NAMES:
+        r_name_lower = r.name.lower()
+        if (
+            r.id == LOCKOUT_ROLE_ID
+            or str(r.id) == "1534636469443100692"
+            or "locked out" in r_name_lower
+            or "quarantine" in r_name_lower
+            or "unverified" in r_name_lower
+            or r.name in LOCKOUT_ROLE_NAMES
+        ):
             return True
 
     if udata and udata.get("quarantined", False):
