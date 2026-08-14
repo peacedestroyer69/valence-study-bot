@@ -2552,49 +2552,35 @@ def apply_global_gateway_lockout(bot: commands.Bot, locked_role_id: int = 153463
 
 
 async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout") -> tuple[bool, str]:
-    """Adds the 'Locked Out' role (ID: 1534636469443100692) to non-admin members and disconnects quarantined users from non-general VCs."""
+    """Adds the 'Locked Out' role (ID: 1534636469443100692) to members and disconnects quarantined users from non-general VCs."""
     guild = member.guild
-    is_admin = member.id in (VALENCE_ID, UJJWAL_ID) or member.guild_permissions.administrator or guild.owner_id == member.id
 
-    if not is_admin:
-        role = guild.get_role(LOCKOUT_ROLE_ID) or discord.utils.get(guild.roles, name="Locked Out")
-        if not role:
-            try:
-                role = await guild.create_role(
-                    name="Locked Out",
-                    color=discord.Color.from_rgb(120, 120, 120),
-                    reason="Auto-created quarantine lockout role"
-                )
-            except Exception as e:
-                logging.error(f"[QUARANTINE] Could not create 'Locked Out' role: {e}")
-                return False, f"Could not create 'Locked Out' role: {e}"
+    role = guild.get_role(LOCKOUT_ROLE_ID) or discord.utils.get(guild.roles, name="Locked Out")
+    if not role:
+        try:
+            role = await guild.create_role(
+                name="Locked Out",
+                color=discord.Color.from_rgb(120, 120, 120),
+                reason="Auto-created quarantine lockout role"
+            )
+        except Exception as e:
+            logging.error(f"[QUARANTINE] Could not create 'Locked Out' role: {e}")
+            return False, f"Could not create 'Locked Out' role: {e}"
 
-        if role:
-            # Strip other member roles to prevent Discord permission ALLOW overrides (Never strip admin roles)
-            roles_to_remove = [
-                r for r in member.roles 
-                if not r.is_default() and not r.managed and r != role and not r.permissions.administrator and r.position < guild.me.top_role.position
-            ]
-            if roles_to_remove:
-                try:
-                    await member.remove_roles(*roles_to_remove, reason=f"Quarantine lockout — stripping member roles: {reason}")
-                except Exception as r_err:
-                    logging.warning(f"[QUARANTINE] Could not strip member roles from {member.display_name}: {r_err}")
+    if role and role not in member.roles:
+        try:
+            await member.add_roles(role, reason=reason)
+            logging.info(f"[QUARANTINE] Assigned 'Locked Out' role to {member.display_name}")
+        except discord.Forbidden:
+            err_msg = f"Discord hierarchy error: 'YPT Study Bot' role position is lower than {member.display_name}'s highest role in Server Settings -> Roles."
+            logging.error(f"[QUARANTINE] {err_msg}")
+            return False, err_msg
+        except Exception as e:
+            err_msg = f"Failed assigning 'Locked Out' role: {e}"
+            logging.error(f"[QUARANTINE] {err_msg}")
+            return False, err_msg
 
-            if role not in member.roles:
-                try:
-                    await member.add_roles(role, reason=reason)
-                    logging.info(f"[QUARANTINE] Assigned 'Locked Out' role to {member.display_name}")
-                except discord.Forbidden:
-                    err_msg = f"Discord hierarchy error: 'YPT Study Bot' role position is lower than {member.display_name}'s highest role in Server Settings -> Roles."
-                    logging.error(f"[QUARANTINE] {err_msg}")
-                    return False, err_msg
-                except Exception as e:
-                    err_msg = f"Failed assigning 'Locked Out' role: {e}"
-                    logging.error(f"[QUARANTINE] {err_msg}")
-                    return False, err_msg
-
-    # Disconnect from non-general voice channels for ALL quarantined users (including admins)
+    # Disconnect from non-general voice channels for ALL quarantined users
     if member.voice and member.voice.channel:
         v_name = member.voice.channel.name.lower()
         if "general" not in v_name and "lobby" not in v_name:
@@ -2604,10 +2590,7 @@ async def apply_quarantine_role(member: discord.Member, reason: str = "Disciplin
             except Exception as vc_err:
                 logging.warning(f"[QUARANTINE VC KICK] Could not disconnect {member.display_name}: {vc_err}")
 
-    if is_admin:
-        return True, f"Admin soft quarantine applied for {member.display_name} (Code-level text auto-delete & VC auto-kick active until /verify; no roles stripped)."
-
-    return True, "Locked Out role assigned and member roles stripped successfully."
+    return True, "Locked Out role assigned successfully."
 
 
 async def sync_channel_lockout_permissions(guild: discord.Guild) -> int:
