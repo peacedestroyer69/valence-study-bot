@@ -2392,37 +2392,52 @@ LOCKOUT_ROLE_ID = 1534636469443100692
 LOCKOUT_ROLE_NAMES = {"Locked Out", "Quarantined", "Unverified"}
 
 
+def is_role_locked_out(role_id: int | str, role_name: str = "") -> bool:
+    """Helper to check if a role ID or role name represents a lockout role."""
+    s_id = str(role_id)
+    if s_id == "1534636469443100692" or role_id == LOCKOUT_ROLE_ID:
+        return True
+    if role_name:
+        r_name_lower = role_name.lower()
+        if "locked out" in r_name_lower or "quarantine" in r_name_lower or "unverified" in r_name_lower:
+            return True
+    return False
+
+
 def is_user_locked_out(user: discord.User | discord.Member, udata: dict = None, guild: discord.Guild = None) -> bool:
     """Returns True if the user has Role ID 1534636469443100692, any lockout role name, or quarantined=True in DB."""
     if not user:
         return False
 
     member = user
-    if not isinstance(user, discord.Member):
-        if guild:
-            member = guild.get_member(user.id) or user
+    g = guild or getattr(member, "guild", None)
+    if g and not isinstance(user, discord.Member):
+        member = g.get_member(user.id) or user
 
-    # 1. Check raw member._roles (FAST & Direct int/str IDs from Discord gateway)
+    # 1. Check raw member._roles set (FAST & Direct int/str IDs from Discord gateway)
     raw_roles = getattr(member, "_roles", set())
     for r_id in raw_roles:
-        if r_id == LOCKOUT_ROLE_ID or str(r_id) == "1534636469443100692":
+        if is_role_locked_out(r_id):
             return True
+        if g:
+            r_obj = g.get_role(int(r_id)) if str(r_id).isdigit() else None
+            if r_obj and is_role_locked_out(r_obj.id, r_obj.name):
+                return True
 
-    # 2. Check member.roles (Role objects for ID and name matching)
+    # 2. Check member.roles (Role objects)
     roles = getattr(member, "roles", [])
     for r in roles:
-        r_name_lower = r.name.lower()
-        if (
-            r.id == LOCKOUT_ROLE_ID
-            or str(r.id) == "1534636469443100692"
-            or "locked out" in r_name_lower
-            or "quarantine" in r_name_lower
-            or "unverified" in r_name_lower
-            or r.name in LOCKOUT_ROLE_NAMES
-        ):
+        if is_role_locked_out(r.id, r.name):
             return True
 
-    # 3. Check database flag
+    # 3. Fallback: check all guild roles if member._roles matches any role named 'Locked Out'
+    if g:
+        for r_id in raw_roles:
+            for r in getattr(g, "roles", []):
+                if r.id == int(r_id) and is_role_locked_out(r.id, r.name):
+                    return True
+
+    # 4. Check database flag
     if udata and udata.get("quarantined", False):
         return True
 
@@ -2440,52 +2455,51 @@ def apply_global_gateway_lockout(bot: commands.Bot, locked_role_id: int = 153463
         if not user:
             return False
 
-        # 1. Check raw member._roles set (bypasses g.get_role cache miss)
+        g = getattr(user, "guild", None)
+
+        # 1. Check raw member._roles set
         raw_roles = getattr(user, "_roles", set())
         for r_id in raw_roles:
-            if r_id == locked_role_id or str(r_id) == "1534636469443100692":
+            if is_role_locked_out(r_id):
                 return True
+            if g:
+                r_obj = g.get_role(int(r_id)) if str(r_id).isdigit() else None
+                if r_obj and is_role_locked_out(r_obj.id, r_obj.name):
+                    return True
 
-        # 2. Check raw interaction member roles payload from Gateway
+        # 2. Check raw interaction payload from Gateway
         if raw_interaction_data and isinstance(raw_interaction_data, dict):
             member_data = raw_interaction_data.get("member", {})
             if isinstance(member_data, dict):
                 payload_roles = member_data.get("roles", [])
                 for r_id in payload_roles:
-                    if str(r_id) == "1534636469443100692" or r_id == locked_role_id:
+                    if is_role_locked_out(r_id):
                         return True
+                    if g:
+                        r_obj = g.get_role(int(r_id)) if str(r_id).isdigit() else None
+                        if r_obj and is_role_locked_out(r_obj.id, r_obj.name):
+                            return True
 
-        # 3. Check role objects
+        # 3. Check member.roles
         if hasattr(user, "roles"):
             for role in user.roles:
-                r_name = role.name.lower()
-                if (
-                    role.id == locked_role_id
-                    or str(role.id) == "1534636469443100692"
-                    or "locked out" in r_name
-                    or "quarantine" in r_name
-                    or "unverified" in r_name
-                ):
+                if is_role_locked_out(role.id, role.name):
                     return True
 
-        # 4. DM / discord.User fallback across all bot guilds
+        # 4. Fallback check across all bot guilds
         if isinstance(user, (discord.User, discord.Member)):
             for guild in bot.guilds:
                 m = guild.get_member(user.id)
                 if m:
                     m_raw = getattr(m, "_roles", set())
                     for r_id in m_raw:
-                        if r_id == locked_role_id or str(r_id) == "1534636469443100692":
+                        if is_role_locked_out(r_id):
+                            return True
+                        r_obj = guild.get_role(int(r_id)) if str(r_id).isdigit() else None
+                        if r_obj and is_role_locked_out(r_obj.id, r_obj.name):
                             return True
                     for role in getattr(m, "roles", []):
-                        r_name = role.name.lower()
-                        if (
-                            role.id == locked_role_id
-                            or str(role.id) == "1534636469443100692"
-                            or "locked out" in r_name
-                            or "quarantine" in r_name
-                            or "unverified" in r_name
-                        ):
+                        if is_role_locked_out(role.id, role.name):
                             return True
         return False
 
