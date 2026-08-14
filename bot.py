@@ -34,7 +34,8 @@ from utils import (
     STUDY_CHANNELS, DOUBT_CHANNELS, DISCUSSION_CHANNELS, STUDY_TEXT_CHANNELS, GAME_CHANNELS,
     VALENCE_ID, UJJWAL_ID, USER_COLORS, DEFAULT_COLOR, POMODORO_CHANNEL_ID,
     POMODORO_STUDY_SECONDS, POMODORO_BREAK_SECONDS, POMODORO_CYCLE_SECONDS,
-    DOUBT_TAGS, DOUBT_QUOTES, MOTIVATIONAL_QUOTES
+    DOUBT_TAGS, DOUBT_QUOTES, MOTIVATIONAL_QUOTES,
+    is_user_locked_out, LOCKOUT_ROLE_ID, LOCKOUT_ROLE_NAMES
 )
 
 # --- Logging Helper Functions ---
@@ -567,10 +568,10 @@ async def global_lockout_check(interaction: discord.Interaction) -> bool:
     if not interaction.command:
         return True
 
-    cmd_name = interaction.command.name.lower()
-    qual_name = interaction.command.qualified_name.lower()
+    cmd_name = getattr(interaction.command, "name", "").lower()
+    qual_name = getattr(interaction.command, "qualified_name", "").lower()
 
-    # Allow /verify and admin override commands
+    # Always allow /verify and admin override commands
     if cmd_name == "verify" or qual_name.startswith("verify") or "admin_override" in qual_name:
         return True
 
@@ -578,21 +579,16 @@ async def global_lockout_check(interaction: discord.Interaction) -> bool:
     if not user:
         return True
 
-    # Check Discord Roles ("Locked Out", "Quarantined", "Unverified")
-    roles = getattr(user, "roles", [])
-    has_lockout_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in roles)
-
-    # Check Database quarantine flag
-    is_quarantined_db = False
+    # Check database quarantine flag
+    udata = {}
     try:
         data = await bot.load_data()
         uid = str(user.id)
         udata = data.get("users", {}).get(uid, {})
-        is_quarantined_db = udata.get("quarantined", False)
     except Exception as e:
         logging.warning(f"[LOCKOUT CHECK] Could not load DB state for {user.id}: {e}")
 
-    if is_quarantined_db or has_lockout_role:
+    if is_user_locked_out(user, udata):
         if not interaction.response.is_done():
             try:
                 await interaction.response.send_message(
@@ -614,18 +610,15 @@ async def on_interaction(interaction: discord.Interaction):
         if user:
             custom_id = (interaction.data.get("custom_id") or "") if interaction.data else ""
             if not custom_id.startswith("verify_"):
-                roles = getattr(user, "roles", [])
-                has_lockout_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in roles)
-                is_quarantined_db = False
+                udata = {}
                 try:
                     data = await load_data()
                     uid = str(user.id)
                     udata = data.get("users", {}).get(uid, {})
-                    is_quarantined_db = udata.get("quarantined", False)
                 except Exception:
                     pass
 
-                if is_quarantined_db or has_lockout_role:
+                if is_user_locked_out(user, udata):
                     if not interaction.response.is_done():
                         try:
                             await interaction.response.send_message(
@@ -2075,8 +2068,7 @@ async def on_message(message: discord.Message):
         uid_str = str(message.author.id)
         data = await load_data()
         udata = data.get("users", {}).get(uid_str, {})
-        has_locked_role = any(r.name in ("Locked Out", "Quarantined", "Unverified") for r in message.author.roles)
-        if udata.get("quarantined") or has_locked_role:
+        if is_user_locked_out(message.author, udata):
             # Allow messaging ONLY in #general and #bot-command so they can use /verify and talk to admins
             allowed_ids = {GENERAL_CHANNEL_ID}
             ch_name = message.channel.name.lower() if hasattr(message.channel, 'name') else ""
@@ -2087,10 +2079,18 @@ async def on_message(message: discord.Message):
                     pass
                 try:
                     await message.channel.send(
-                        f"🔒 <@{message.author.id}> **Access Denied**: You are currently locked out of server channels due to missed study days/puzzles. "
+                        f"🔒 <@{message.author.id}> **Access Denied**: You are currently locked out of server channels. "
                         f"You can chat in `#general` or use `/verify` to restore your full access!",
                         delete_after=10
                     )
+                except Exception:
+                    pass
+                return
+
+            # If in #general or #bot-command, block prefix commands starting with ! except !verify
+            if message.content.startswith("!") and not message.content.lower().startswith("!verify"):
+                try:
+                    await message.delete()
                 except Exception:
                     pass
                 return

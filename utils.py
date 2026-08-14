@@ -2388,13 +2388,33 @@ def render_math_card(query: str, solution_text: str, formula_tex: str = None,
     return buf
 
 
+LOCKOUT_ROLE_ID = 1534636469443100692
+LOCKOUT_ROLE_NAMES = {"Locked Out", "Quarantined", "Unverified"}
+
+
+def is_user_locked_out(user: discord.User | discord.Member, udata: dict = None) -> bool:
+    """Returns True if the user has Role ID 1534636469443100692, any lockout role name, or quarantined=True in DB."""
+    if not user:
+        return False
+
+    roles = getattr(user, "roles", [])
+    for r in roles:
+        if r.id == LOCKOUT_ROLE_ID or str(r.id) == "1534636469443100692" or r.name in LOCKOUT_ROLE_NAMES:
+            return True
+
+    if udata and udata.get("quarantined", False):
+        return True
+
+    return False
+
+
 async def apply_quarantine_role(member: discord.Member, reason: str = "Discipline Lockout") -> tuple[bool, str]:
-    """Adds the 'Locked Out' role to non-admin members and disconnects quarantined users (including admins) from non-general voice channels."""
+    """Adds the 'Locked Out' role (ID: 1534636469443100692) to non-admin members and disconnects quarantined users from non-general VCs."""
     guild = member.guild
     is_admin = member.id in (VALENCE_ID, UJJWAL_ID) or member.guild_permissions.administrator or guild.owner_id == member.id
 
     if not is_admin:
-        role = discord.utils.get(guild.roles, name="Locked Out")
+        role = guild.get_role(LOCKOUT_ROLE_ID) or discord.utils.get(guild.roles, name="Locked Out")
         if not role:
             try:
                 role = await guild.create_role(
@@ -2514,9 +2534,9 @@ async def sync_channel_lockout_permissions(guild: discord.Guild) -> int:
 
 
 async def remove_quarantine_role(member: discord.Member, reason: str = "Unlocked"):
-    """Removes the 'Locked Out' role from member."""
+    """Removes the 'Locked Out' role (ID: 1534636469443100692) from member."""
     guild = member.guild
-    role = discord.utils.get(guild.roles, name="Locked Out")
+    role = guild.get_role(LOCKOUT_ROLE_ID) or discord.utils.get(guild.roles, name="Locked Out")
     if role and role in member.roles:
         try:
             await member.remove_roles(role, reason=reason)
