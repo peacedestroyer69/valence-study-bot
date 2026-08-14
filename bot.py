@@ -512,6 +512,8 @@ intents.guilds = True
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+from utils import apply_global_gateway_lockout
+apply_global_gateway_lockout(bot)
 bot.load_data = load_data
 bot.save_data = save_data
 bot.data_lock = data_lock
