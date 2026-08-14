@@ -2392,12 +2392,16 @@ LOCKOUT_ROLE_ID = 1534636469443100692
 LOCKOUT_ROLE_NAMES = {"Locked Out", "Quarantined", "Unverified"}
 
 
-def is_user_locked_out(user: discord.User | discord.Member, udata: dict = None) -> bool:
+def is_user_locked_out(user: discord.User | discord.Member, udata: dict = None, guild: discord.Guild = None) -> bool:
     """Returns True if the user has Role ID 1534636469443100692, any lockout role name, or quarantined=True in DB."""
     if not user:
         return False
 
-    roles = getattr(user, "roles", [])
+    member = user
+    if guild and not isinstance(user, discord.Member):
+        member = guild.get_member(user.id) or user
+
+    roles = getattr(member, "roles", [])
     for r in roles:
         if r.id == LOCKOUT_ROLE_ID or str(r.id) == "1534636469443100692" or r.name in LOCKOUT_ROLE_NAMES:
             return True

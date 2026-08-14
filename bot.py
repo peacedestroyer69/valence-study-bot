@@ -588,7 +588,7 @@ async def global_lockout_check(interaction: discord.Interaction) -> bool:
     except Exception as e:
         logging.warning(f"[LOCKOUT CHECK] Could not load DB state for {user.id}: {e}")
 
-    if is_user_locked_out(user, udata):
+    if is_user_locked_out(user, udata, guild=interaction.guild):
         if not interaction.response.is_done():
             try:
                 await interaction.response.send_message(
@@ -618,7 +618,7 @@ async def on_interaction(interaction: discord.Interaction):
                 except Exception:
                     pass
 
-                if is_user_locked_out(user, udata):
+                if is_user_locked_out(user, udata, guild=interaction.guild):
                     if not interaction.response.is_done():
                         try:
                             await interaction.response.send_message(
