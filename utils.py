@@ -4,7 +4,9 @@
 import datetime
 import logging
 import discord
+from discord.ext import commands
 import os
+
 from dotenv import load_dotenv
 
 # Load environment variables first so configurations load correctly
